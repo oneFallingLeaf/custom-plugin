@@ -1,0 +1,125 @@
+diff -ruN a/packages/opencode/src/plugin/tui/runtime.ts b/packages/opencode/src/plugin/tui/runtime.ts
+--- a/packages/opencode/src/plugin/tui/runtime.ts	2026-09-15 06:46:46.475916636 +0800
++++ b/packages/opencode/src/plugin/tui/runtime.ts	2026-09-15 06:46:46.479594633 +0800
+@@ -617,6 +617,7 @@
+     keys: api.keys,
+     keymap,
+     mode: createScopedMode(api.mode, scope),
++    model: api.model,
+     route,
+     ui: api.ui,
+     tuiConfig: api.tuiConfig,
+diff -ruN a/packages/opencode/test/fixture/tui-plugin.ts b/packages/opencode/test/fixture/tui-plugin.ts
+--- a/packages/opencode/test/fixture/tui-plugin.ts	2026-09-15 06:46:46.476661523 +0800
++++ b/packages/opencode/test/fixture/tui-plugin.ts	2026-09-15 06:46:46.480281489 +0800
+@@ -90,6 +90,7 @@
+   attention?: AttentionOpts
+   event?: HostPluginApi["event"]
+   mode?: HostPluginApi["mode"]
++  model?: HostPluginApi["model"]
+   count?: Count
+   keymap?: HostPluginApi["keymap"]
+   tuiConfig?: Partial<HostPluginApi["tuiConfig"]>
+@@ -242,6 +243,13 @@
+       current: () => "base",
+       push: () => () => {},
+     },
++    model: opts.model ?? {
++      current: () => undefined,
++      set: () => {},
++      recent: () => [],
++      favorite: () => [],
++      toggleFavorite: () => {},
++    },
+     route: {
+       register: () => {
+         if (count) count.route_add += 1
+diff -ruN a/packages/plugin/src/tui.ts b/packages/plugin/src/tui.ts
+--- a/packages/plugin/src/tui.ts	2026-09-15 06:46:46.473639193 +0800
++++ b/packages/plugin/src/tui.ts	2026-09-15 06:46:46.477389498 +0800
+@@ -578,6 +578,21 @@
+   set: (workspaceID?: string) => void
+ }
+ 
++export type TuiModelRef = {
++  providerID: string
++  modelID: string
++}
++
++export type TuiModel = {
++  /** The model the prompt will use for the next message. */
++  current: () => TuiModelRef | undefined
++  /** Switch the model the prompt will use for the next message. */
++  set: (model: TuiModelRef, options?: { recent?: boolean }) => void
++  recent: () => ReadonlyArray<TuiModelRef>
++  favorite: () => ReadonlyArray<TuiModelRef>
++  toggleFavorite: (model: TuiModelRef) => void
++}
++
+ export type TuiPluginApi = {
+   app: TuiApp
+   attention: TuiAttention
+@@ -591,6 +606,7 @@
+   keys: TuiKeys
+   keymap: TuiKeymap
+   mode: TuiModeApi
++  model: TuiModel
+   route: {
+     register: (routes: TuiRouteDefinition[]) => () => void
+     navigate: (name: string, params?: Record<string, unknown>) => void
+diff -ruN a/packages/tui/src/app.tsx b/packages/tui/src/app.tsx
+--- a/packages/tui/src/app.tsx	2026-09-15 06:46:46.475092067 +0800
++++ b/packages/tui/src/app.tsx	2026-09-15 06:46:46.478798758 +0800
+@@ -399,6 +399,7 @@
+       sync,
+       theme: themeState,
+       toast,
++      local,
+       renderer,
+       attention,
+       Slot: pluginRuntime.Slot,
+diff -ruN a/packages/tui/src/plugin/adapters.tsx b/packages/tui/src/plugin/adapters.tsx
+--- a/packages/tui/src/plugin/adapters.tsx	2026-09-15 06:46:46.474434136 +0800
++++ b/packages/tui/src/plugin/adapters.tsx	2026-09-15 06:46:46.478080762 +0800
+@@ -5,6 +5,7 @@
+ import type { useSDK } from "../context/sdk"
+ import type { useSync } from "../context/sync"
+ import type { useTheme } from "../context/theme"
++import type { useLocal } from "../context/local"
+ import { Dialog as DialogUI, type useDialog } from "../ui/dialog"
+ import type { useOpencodeKeymap } from "../keymap"
+ import type { useKV } from "../context/kv"
+@@ -33,6 +34,7 @@
+   sync: ReturnType<typeof useSync>
+   theme: ReturnType<typeof useTheme>
+   toast: ReturnType<typeof useToast>
++  local: ReturnType<typeof useLocal>
+   renderer: TuiPluginApi["renderer"]
+   attention: TuiPluginApi["attention"]
+   Slot: TuiPluginApi["ui"]["Slot"]
+@@ -193,6 +195,25 @@
+         return Keymap.getOpencodeModeStack(input.keymap).push(mode)
+       },
+     },
++    model: {
++      current() {
++        const value = input.local.model.current()
++        if (!value) return undefined
++        return { providerID: value.providerID, modelID: value.modelID }
++      },
++      set(model, options) {
++        input.local.model.set({ providerID: model.providerID, modelID: model.modelID }, options)
++      },
++      recent() {
++        return input.local.model.recent().map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
++      },
++      favorite() {
++        return input.local.model.favorite().map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
++      },
++      toggleFavorite(model) {
++        input.local.model.toggleFavorite({ providerID: model.providerID, modelID: model.modelID })
++      },
++    },
+     route: {
+       register(list) {
+         return input.routes.register(list)
