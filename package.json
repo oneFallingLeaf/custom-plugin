@@ -1,0 +1,34 @@
+{
+  "name": "opencode-model-sidebar",
+  "version": "0.1.0",
+  "description": "OpenCode TUI plugin: a searchable model list in the session sidebar, below LSP.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./tui": "./tui/model-sidebar.tsx"
+  },
+  "files": [
+    "tui",
+    "patches",
+    "examples",
+    "README.md"
+  ],
+  "oc-plugin": [
+    "tui"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "models",
+    "sidebar"
+  ],
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  }
+}
