@@ -20,13 +20,13 @@
  *              "session" calls session.switchModel, which changes the session's
  *              model but NOT the TUI-local model used by typed prompts.
  *
- * Selecting a model is a true one-click switch on opencode builds that expose
- * the TUI-local model as `api.model` (the `model-api` patch in this repo).
- * Stock opencode 1.18 does not expose it, so the plugin falls back to opening
- * the native picker, the only reliable switch there.
+ * Selecting a model (double-clicking its row) is a true switch on opencode
+ * builds that expose the TUI-local model as `api.model` (the `model-api` patch
+ * in this repo). Stock opencode 1.18 does not expose it, so the plugin falls
+ * back to opening the native picker, the only reliable switch there.
  */
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
-import { createMemo, createSignal, For, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
 
 type Options = {
@@ -53,10 +53,15 @@ type ModelItem = {
   free: boolean
 }
 
+type ModelRef = { providerID: string; modelID: string }
+
 type Editor = { focus: () => void; blur: () => void; focused: boolean; isDestroyed?: boolean }
+
+type PointerStyle = "default" | "pointer" | "text"
 
 const DEFAULT_KEYBIND = "ctrl+shift+m"
 const DEFAULT_ROWS = 12
+const DOUBLE_CLICK_MS = 400
 
 function resolveOptions(input: Options | undefined): Resolved {
   return {
@@ -109,15 +114,33 @@ function View(props: {
   const [open, setOpen] = createSignal(true)
   const [filtering, setFiltering] = createSignal(false)
   const [query, setQuery] = createSignal("")
+  const [tab, setTab] = createSignal<"favorites" | "all">("favorites")
   const [cursor, setCursor] = createSignal(0)
+  const [windowStart, setWindowStart] = createSignal(0)
 
   let editor: Editor | undefined
+  let pointer: PointerStyle | undefined
+  let lastClick: { row: number; at: number } | undefined
+
+  // Terminal mouse pointer (OSC 22). Hovering rows shows a hand, the search
+  // box an I-beam, and leaving them restores the default arrow.
+  function setPointer(style: PointerStyle) {
+    if (pointer === style) return
+    pointer = style
+    const renderer = props.api.renderer as unknown as {
+      isDestroyed?: boolean
+      setMousePointer?: (style: string) => void
+    }
+    if (renderer.isDestroyed) return
+    renderer.setMousePointer?.(style)
+  }
 
   const modelApi = (
     props.api as unknown as {
       model?: {
-        current?: () => { providerID: string; modelID: string } | undefined
-        set?: (model: { providerID: string; modelID: string }, options?: { recent?: boolean }) => void
+        current?: () => ModelRef | undefined
+        set?: (model: ModelRef, options?: { recent?: boolean }) => void
+        favorite?: () => ReadonlyArray<ModelRef>
       }
     }
   ).model
@@ -128,7 +151,28 @@ function View(props: {
     return props.api.state.session.get(props.sessionID)?.model
   })
   const all = createMemo(() => collect(props.api, ""))
-  const filtered = createMemo(() => collect(props.api, query()))
+  const favorites = createMemo(() => {
+    return new Set((modelApi?.favorite?.() ?? []).map((item) => `${item.providerID}\u0000${item.modelID}`))
+  })
+  const filtered = createMemo(() => {
+    const items = collect(props.api, query())
+    if (tab() === "all") return items
+    const selected = favorites()
+    return items.filter((item) => selected.has(`${item.providerID}\u0000${item.id}`))
+  })
+
+  // Filtering rebuilds every row, so the row the mouse was over is destroyed
+  // and never fires `mouseout`. Restore the default pointer whenever the list
+  // changes; opentui re-checks hover after the render and replays `mouseover`
+  // for whatever now sits under the mouse. Clicking is the only thing that
+  // moves the selection: hovering must not re-slice the window (that made the
+  // list auto-scroll/"expand"), matching the original implementation.
+  createEffect(() => {
+    filtered()
+    setPointer("default")
+    lastClick = undefined
+    setWindowStart(0)
+  })
 
   const clamped = createMemo(() => {
     const length = filtered().length
@@ -136,15 +180,40 @@ function View(props: {
     return Math.min(Math.max(cursor(), 0), length - 1)
   })
 
+  // The visible window is pinned to `windowStart` and does NOT follow the
+  // selection. It only moves when the selection would leave the window, or when
+  // the user pages. This keeps the list perfectly still when a row is clicked
+  // (highlight) instead of re-centring on every cursor change.
   const windowRows = createMemo(() => {
     const items = filtered()
     const rows = props.maxRows
-    if (items.length <= rows) return { items, offset: 0, more: 0 }
-    const index = clamped()
-    let start = Math.max(0, index - Math.floor(rows / 2))
-    start = Math.min(start, items.length - rows)
+    const maxStart = Math.max(0, items.length - rows)
+    const start = Math.min(Math.max(windowStart(), 0), maxStart)
     return { items: items.slice(start, start + rows), offset: start, more: items.length - start - rows }
   })
+
+  function moveCursor(index: number) {
+    const rows = props.maxRows
+    const total = filtered().length
+    const next = total === 0 ? 0 : Math.min(Math.max(index, 0), total - 1)
+    const maxStart = Math.max(0, total - rows)
+    let start = windowStart()
+    if (next < start) start = next
+    else if (next >= start + rows) start = next - rows + 1
+    setWindowStart(Math.min(Math.max(start, 0), maxStart))
+    setCursor(next)
+  }
+
+  function page(direction: 1 | -1) {
+    const rows = props.maxRows
+    const total = filtered().length
+    const maxStart = Math.max(0, total - rows)
+    const start = Math.min(Math.max(windowStart() + direction * rows, 0), maxStart)
+    setWindowStart(start)
+    const index = clamped()
+    if (index < start) setCursor(start)
+    else if (index >= start + rows) setCursor(Math.min(start + rows - 1, Math.max(total - 1, 0)))
+  }
 
   function swallow(evt: { preventDefault: () => void; stopPropagation: () => void }) {
     evt.preventDefault()
@@ -165,34 +234,45 @@ function View(props: {
     setFiltering(true)
   }
 
-  function exitSearch() {
+  function exitSearch(restoreFocus = true) {
     setFiltering(false)
+    setPointer("default")
+    if (!restoreFocus) return
     const value = editor
     if (value && !value.isDestroyed) value.focus()
   }
 
   function append(text: string) {
     setQuery((value) => value + text)
-    setCursor(0)
+    moveCursor(0)
   }
 
   function step(direction: 1 | -1) {
     const length = filtered().length
     if (length === 0) return
-    setCursor((value) => {
-      const next = Math.min(Math.max(value, 0), length - 1) + direction
-      if (next < 0) return length - 1
-      if (next >= length) return 0
-      return next
-    })
+    const next = clamped() + direction
+    if (next < 0) moveCursor(length - 1)
+    else if (next >= length) moveCursor(0)
+    else moveCursor(next)
+  }
+
+  // First click highlights the row, a second click on the same row within
+  // DOUBLE_CLICK_MS switches to it. opentui's MouseEvent has no click count,
+  // so track the previous click ourselves.
+  function clickRow(item: ModelItem, row: number) {
+    const now = Date.now()
+    const double = lastClick !== undefined && lastClick.row === row && now - lastClick.at <= DOUBLE_CLICK_MS
+    lastClick = double ? undefined : { row, at: now }
+    moveCursor(row)
+    if (double) void choose(item)
   }
 
   async function choose(item: ModelItem | undefined) {
     if (!item) return
     exitSearch()
 
-    // Patched opencode exposes the TUI-local model. This is a true one-click
-    // switch: the prompt will use the chosen model on the next message.
+    // Patched opencode exposes the TUI-local model. This is a true switch:
+    // the prompt will use the chosen model on the next message.
     if (modelApi?.set) {
       modelApi.set({ providerID: item.providerID, modelID: item.id }, { recent: true })
       props.api.ui.toast({ variant: "success", message: `Model: ${item.name}`, duration: 2500 })
@@ -238,11 +318,33 @@ function View(props: {
       if (filtering()) exitSearch()
       else enterSearch()
     })
+
+    // If the user gives focus back to a real editor (for example by clicking
+    // the prompt), stop capturing the keyboard so typing goes there again.
+    const renderer = props.api.renderer as unknown as {
+      on: (event: string, listener: (...args: unknown[]) => void) => void
+      off: (event: string, listener: (...args: unknown[]) => void) => void
+    }
+    const onFocusedEditor = (current: unknown) => {
+      if (current && filtering()) exitSearch(false)
+    }
+    renderer.on("focused_editor", onFocusedEditor)
+    onCleanup(() => {
+      renderer.off("focused_editor", onFocusedEditor)
+      setPointer("default")
+    })
   })
 
   useKeyboard((evt) => {
     if (!filtering()) return
     if (props.api.ui.dialog.open) return
+
+    // Safety net in case the focus event was missed: never keep swallowing
+    // keys once another editor owns focus.
+    if (props.api.renderer.currentFocusedEditor) {
+      exitSearch(false)
+      return
+    }
 
     if (editor && !editor.isDestroyed && editor.focused) editor.blur()
 
@@ -252,7 +354,7 @@ function View(props: {
       if (name === "u") {
         swallow(evt)
         setQuery("")
-        setCursor(0)
+        moveCursor(0)
         return
       }
       if (name === "p") {
@@ -285,22 +387,22 @@ function View(props: {
     }
     if (name === "pageup") {
       swallow(evt)
-      setCursor((value) => Math.max(0, value - props.maxRows))
+      page(-1)
       return
     }
     if (name === "pagedown") {
       swallow(evt)
-      setCursor((value) => Math.min(filtered().length - 1, value + props.maxRows))
+      page(1)
       return
     }
     if (name === "home") {
       swallow(evt)
-      setCursor(0)
+      moveCursor(0)
       return
     }
     if (name === "end") {
       swallow(evt)
-      setCursor(Math.max(0, filtered().length - 1))
+      moveCursor(Math.max(0, filtered().length - 1))
       return
     }
     if (name === "return" || name === "enter") {
@@ -311,7 +413,7 @@ function View(props: {
     if (name === "backspace") {
       swallow(evt)
       setQuery((value) => value.slice(0, -1))
-      setCursor(0)
+      moveCursor(0)
       return
     }
     if (name === "space") {
@@ -329,7 +431,13 @@ function View(props: {
 
   return (
     <box flexDirection="column">
-      <box flexDirection="row" gap={1} onMouseDown={() => setOpen((value) => !value)}>
+      <box
+        flexDirection="row"
+        gap={1}
+        onMouseOver={() => setPointer("pointer")}
+        onMouseOut={() => setPointer("default")}
+        onMouseDown={() => setOpen((value) => !value)}
+      >
         <text fg={theme().text}>{open() ? "▼" : "▶"}</text>
         <text fg={theme().text}>
           <b>Models</b>
@@ -340,40 +448,90 @@ function View(props: {
         </Show>
       </box>
       <Show when={open()}>
-        <box flexDirection="row" onMouseDown={() => enterSearch()}>
+        <box flexDirection="row" gap={1}>
+          <text
+            fg={tab() === "favorites" ? theme().accent : theme().textMuted}
+            onMouseOver={() => setPointer("pointer")}
+            onMouseOut={() => setPointer("default")}
+            onMouseUp={() => setTab("favorites")}
+          >
+            {"Favorites " + favorites().size}
+          </text>
+          <text fg={theme().textMuted}>|</text>
+          <text
+            fg={tab() === "all" ? theme().accent : theme().textMuted}
+            onMouseOver={() => setPointer("pointer")}
+            onMouseOut={() => setPointer("default")}
+            onMouseUp={() => setTab("all")}
+          >
+            {"All " + all().length}
+          </text>
+        </box>
+        <box
+          flexDirection="row"
+          onMouseOver={() => setPointer("text")}
+          onMouseOut={() => setPointer("default")}
+          onMouseDown={() => enterSearch()}
+        >
           <text fg={theme().textMuted}>{"⌕ "}</text>
+          <Show when={filtering() && !query()}>
+            <text fg={theme().accent}>█</text>
+          </Show>
           <Show when={query()} fallback={<text fg={theme().textMuted}>Search models…</text>}>
             <text fg={theme().text}>{query()}</text>
           </Show>
-          <Show when={filtering()}>
+          <Show when={filtering() && query()}>
             <text fg={theme().accent}>█</text>
           </Show>
         </box>
         <Show when={windowRows().offset > 0}>
-          <text fg={theme().textMuted}>{"  ▲ " + windowRows().offset + " more"}</text>
+          <text
+            fg={theme().textMuted}
+            onMouseOver={() => setPointer("pointer")}
+            onMouseOut={() => setPointer("default")}
+            onMouseUp={() => page(-1)}
+          >
+            {"  ▲ " + windowRows().offset + " more"}
+          </text>
         </Show>
         <For each={windowRows().items}>
           {(item, index) => {
-            const active = () => windowRows().offset + index() === clamped()
+            const row = () => windowRows().offset + index()
+            const active = () => row() === clamped()
             return (
               <box
                 flexDirection="row"
                 gap={1}
-                onMouseOver={() => setCursor(windowRows().offset + index())}
-                onMouseUp={() => void choose(item)}
+                onMouseOver={() => setPointer("pointer")}
+                onMouseOut={() => setPointer("default")}
+                onMouseDown={() => moveCursor(row())}
+                onMouseUp={() => clickRow(item, row())}
               >
                 <text fg={isCurrent(item) ? theme().success : theme().textMuted}>{isCurrent(item) ? "●" : " "}</text>
-                <text fg={active() ? theme().accent : theme().text}>{item.name}</text>
-                <text fg={theme().textMuted}>{item.providerName}</text>
+                <text fg={active() ? theme().accent : theme().text} wrapMode="none" flexShrink={1}>
+                  {item.name}
+                </text>
+                <text fg={theme().textMuted} wrapMode="none" flexShrink={1}>
+                  {item.providerName}
+                </text>
                 <Show when={item.free}>
-                  <text fg={theme().success}>free</text>
+                  <text fg={theme().success} wrapMode="none">
+                    free
+                  </text>
                 </Show>
               </box>
             )
           }}
         </For>
         <Show when={windowRows().more > 0}>
-          <text fg={theme().textMuted}>{"  ▼ " + windowRows().more + " more"}</text>
+          <text
+            fg={theme().textMuted}
+            onMouseOver={() => setPointer("pointer")}
+            onMouseOut={() => setPointer("default")}
+            onMouseUp={() => page(1)}
+          >
+            {"  ▼ " + windowRows().more + " more"}
+          </text>
         </Show>
         <Show when={filtered().length === 0}>
           <text fg={theme().textMuted}>No models match</text>
@@ -425,4 +583,6 @@ const plugin: TuiPluginModule & { id: string } = {
   tui,
 }
 
+export { collect, resolveOptions }
+export type { ModelItem, Options, Resolved }
 export default plugin

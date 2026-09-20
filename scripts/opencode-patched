@@ -1,0 +1,219 @@
+#!/usr/bin/env sh
+#
+# opencode-patched
+#
+# Runs a model-api-patched build of OpenCode from a pinned version.
+#
+# The model sidebar plugin can only switch models in one click when the host
+# exposes `api.model` (see ../patches/opencode-model-api.patch). This wrapper:
+#
+#   1. reads the pinned version from ./opencode-patched.version,
+#   2. builds that upstream tag with the patch applied, once per version,
+#      into a cache,
+#   3. execs the cached binary.
+#
+# The pin exists because upstream v2.x is the V2 rewrite; its TUI plugin API is
+# a different contract that this patch does not target yet. Do not auto-follow
+# the stock binary (which may be 2.x) until the patch is ported. To move the
+# pin, edit ./opencode-patched.version next to this script.
+#
+# Configuration (environment variables):
+#   OPENCODE_PATCHED_SRC     source checkout (default ~/projects/opencode)
+#   OPENCODE_PATCHED_PATCH   patch file (default <repo>/patches/opencode-model-api.patch)
+#   OPENCODE_PATCHED_CACHE   build cache (default $XDG_CACHE_HOME/opencode-patched)
+#   OPENCODE_PATCHED_REAL    override the real opencode binary
+#   OPENCODE_PATCHED_VERSION override the pinned version
+#   OPENCODE_PATCHED_NO_BUILD  if set, never build; fall back to stock
+#
+set -eu
+
+# $0 is normally the PATH symlink (~/.local/bin/opencode), so two directories:
+# self_dir is the invocation dir (skipped when locating the real binary) and
+# script_dir is the real script location (owns the pin file and patch).
+self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+self_path=$0
+if command -v readlink >/dev/null 2>&1; then
+  self_path=$(readlink -f "$0" 2>/dev/null) || self_path=$0
+fi
+script_dir=$(CDPATH= cd -- "$(dirname -- "$self_path")" && pwd)
+
+SRC=${OPENCODE_PATCHED_SRC:-$HOME/projects/opencode}
+PATCH=${OPENCODE_PATCHED_PATCH:-$script_dir/../patches/opencode-model-api.patch}
+CACHE=${OPENCODE_PATCHED_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/opencode-patched}
+LOG=${OPENCODE_PATCHED_LOG:-$CACHE/build.log}
+
+find_real() {
+  old_ifs=$IFS
+  IFS=:
+  for d in $PATH; do
+    [ -n "$d" ] || d=.
+    [ "$d" = "$self_dir" ] && continue
+    if [ -x "$d/opencode" ]; then
+      IFS=$old_ifs
+      printf '%s\n' "$d/opencode"
+      return 0
+    fi
+  done
+  IFS=$old_ifs
+  return 1
+}
+
+REAL=${OPENCODE_PATCHED_REAL:-}
+if [ -z "$REAL" ]; then
+  REAL=$(find_real) || {
+    echo "opencode-patched: could not find the real opencode binary on PATH" >&2
+    exit 127
+  }
+fi
+if [ ! -x "$REAL" ]; then
+  echo "opencode-patched: real opencode '$REAL' is not executable" >&2
+  exit 127
+fi
+
+run_stock() {
+  # Never leak the build lock into a long-running process.
+  exec 9>&- 2>/dev/null || true
+  exec "$REAL" "$@"
+}
+
+# The pinned version is authoritative; stock only matters for upgrade/uninstall.
+# OPENCODE_PATCHED_VERSION wins, then ./opencode-patched.version, then the real
+# install (last resort; strips the "opencode v" prefix that 2.x prints).
+pin_file=$script_dir/opencode-patched.version
+if [ -n "${OPENCODE_PATCHED_VERSION:-}" ]; then
+  version=$OPENCODE_PATCHED_VERSION
+elif [ -f "$pin_file" ]; then
+  version=$(tr -d '[:space:]' <"$pin_file")
+else
+  version=$("$REAL" --version 2>/dev/null | head -n1 | awk '{print $NF}' | sed -e 's/^v//')
+fi
+if [ -z "$version" ]; then
+  echo "opencode-patched: could not determine opencode version; using stock" >&2
+  run_stock "$@"
+fi
+
+case "${1:-}" in
+  --version | -v | version)
+    printf '%s\n' "$version"
+    exit 0
+    ;;
+  # upgrade/uninstall must act on the real install, not the patched build.
+  upgrade | uninstall) run_stock "$@" ;;
+esac
+
+cache_dir=$CACHE/$version
+bin=$cache_dir/opencode
+marker=$cache_dir/patch.sha
+
+if command -v sha256sum >/dev/null 2>&1; then
+  patch_sha=$(sha256sum "$PATCH" 2>/dev/null | cut -d' ' -f1)
+else
+  patch_sha=$(cksum "$PATCH" 2>/dev/null | tr -d '[:space:]')
+fi
+
+fresh() {
+  [ -x "$bin" ] && [ -f "$marker" ] && [ "$(cat "$marker" 2>/dev/null)" = "$patch_sha" ]
+}
+
+if fresh; then
+  exec "$bin" "$@"
+fi
+
+if [ -n "${OPENCODE_PATCHED_NO_BUILD:-}" ]; then
+  echo "opencode-patched: no patched build for $version and builds are disabled; using stock" >&2
+  run_stock "$@"
+fi
+
+mkdir -p "$CACHE" "$cache_dir"
+
+# Serialize builds so two launches do not race. The lock is released before
+# exec'ing a binary: an inherited lock fd would otherwise be held for the whole
+# lifetime of the TUI and block every later build.
+if command -v flock >/dev/null 2>&1; then
+  # shellcheck disable=SC3045
+  exec 9>"$CACHE/.lock" 2>/dev/null || true
+  if ! flock -w 900 9 2>/dev/null; then
+    echo "opencode-patched: another build is in progress; using stock for now" >&2
+    run_stock "$@"
+  fi
+  # shellcheck disable=SC3045
+fi
+
+if fresh; then
+  exec 9>&- 2>/dev/null || true
+  exec "$bin" "$@"
+fi
+
+apply_patch() {
+  if git apply --check "$PATCH" 2>/dev/null; then
+    git apply "$PATCH"
+    return 0
+  fi
+  # Tolerate context drift on newer releases before giving up.
+  if git apply -C1 --check "$PATCH" 2>/dev/null; then
+    git apply -C1 "$PATCH"
+    return 0
+  fi
+  if command -v patch >/dev/null 2>&1 && patch -p1 -l -F3 --dry-run <"$PATCH" >/dev/null 2>&1; then
+    patch -p1 -l -F3 <"$PATCH"
+    return 0
+  fi
+  echo "opencode-patched: patch does not apply cleanly to v$version" >&2
+  return 1
+}
+
+build() {
+  cd "$SRC" || {
+    echo "opencode-patched: source checkout '$SRC' not found" >&2
+    return 1
+  }
+
+  echo "=== build $(date -u +%Y-%m-%dT%H:%M:%SZ) version=$version ==="
+
+  if ! git rev-parse "v$version" >/dev/null 2>&1; then
+    echo "--- fetching v$version ---"
+    git fetch --depth=1 origin "refs/tags/v$version:refs/tags/v$version" || return 1
+  fi
+
+  echo "--- checkout v$version ---"
+  git checkout --force --detach "v$version" || return 1
+  git checkout --force -- . || return 1
+
+  echo "--- applying patch ---"
+  apply_patch || return 1
+
+  echo "--- bun install ---"
+  bun install || return 1
+
+  echo "--- build ---"
+  # OPENCODE_VERSION makes the binary report the release version instead of
+  # the detached-HEAD 0.0.0--<timestamp> preview string.
+  OPENCODE_VERSION="$version" bun run --cwd packages/opencode build --single --skip-embed-web-ui || return 1
+
+  os=$(uname -s | tr '[:upper:]' '[:lower:]')
+  case $(uname -m) in
+    x86_64) arch=x64 ;;
+    aarch64 | arm64) arch=arm64 ;;
+    *) arch=$(uname -m) ;;
+  esac
+  built=$SRC/packages/opencode/dist/opencode-$os-$arch/bin/opencode
+
+  echo "--- install to cache ---"
+  [ -x "$built" ] || {
+    echo "opencode-patched: expected binary at $built" >&2
+    return 1
+  }
+  cp "$built" "$bin.tmp" || return 1
+  chmod +x "$bin.tmp" || return 1
+  mv "$bin.tmp" "$bin" || return 1
+  printf '%s' "$patch_sha" >"$marker"
+}
+
+if build >>"$LOG" 2>&1; then
+  exec 9>&- 2>/dev/null || true
+  exec "$bin" "$@"
+fi
+
+echo "opencode-patched: build for $version failed; see $LOG" >&2
+echo "opencode-patched: falling back to stock opencode" >&2
+run_stock "$@"
