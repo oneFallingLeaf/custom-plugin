@@ -1,0 +1,34 @@
+{
+  "name": "opencode-copilot-sessions",
+  "version": "0.1.0",
+  "description": "OpenCode TUI plugin: press left arrow to open a Copilot-style sessions panel and switch sessions.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./tui": "./tui/sessions.tsx"
+  },
+  "files": [
+    "tui",
+    "examples",
+    "README.md"
+  ],
+  "oc-plugin": [
+    "tui"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tui",
+    "sessions",
+    "sidebar",
+    "copilot"
+  ],
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18.0"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    }
+  }
+}
