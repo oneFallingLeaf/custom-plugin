@@ -4,7 +4,7 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { AssistantMessage, Message } from "@opencode-ai/sdk/v2"
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing"
 import { render } from "@opentui/solid"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import plugin, { type Options } from "../tui/token-usage"
@@ -64,9 +64,18 @@ async function mount(h: MountOptions = {}): Promise<Harness> {
     if (!setup.renderer.isDestroyed) setup.renderer.destroy()
   })
 
-  const stateDir = await mkdtemp(join(tmpdir(), "token-usage-test-"))
-  cleanups.push(() => rm(stateDir, { recursive: true, force: true }))
-  if (h.auth) await writeFile(join(stateDir, "auth.json"), JSON.stringify(h.auth))
+  const dataHome = await mkdtemp(join(tmpdir(), "token-usage-test-"))
+  cleanups.push(() => rm(dataHome, { recursive: true, force: true }))
+  const previousXdgData = process.env.XDG_DATA_HOME
+  process.env.XDG_DATA_HOME = dataHome
+  cleanups.push(() => {
+    if (previousXdgData === undefined) delete process.env.XDG_DATA_HOME
+    else process.env.XDG_DATA_HOME = previousXdgData
+  })
+  if (h.auth) {
+    await mkdir(join(dataHome, "opencode"), { recursive: true })
+    await writeFile(join(dataHome, "opencode", "auth.json"), JSON.stringify(h.auth))
+  }
 
   const fetchCalls: string[] = []
   globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -94,7 +103,7 @@ async function mount(h: MountOptions = {}): Promise<Harness> {
         messages: () => h.messages ?? [],
         get: () => (provider ? { model: { providerID: provider, modelID: "test-model" } } : undefined),
       },
-      path: { state: stateDir },
+      path: { state: join(dataHome, "state") },
     },
     renderer: setup.renderer,
     slots: {

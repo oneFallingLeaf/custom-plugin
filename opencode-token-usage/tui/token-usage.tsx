@@ -135,6 +135,11 @@ function fmtDuration(ms: number): string {
   return `${hours}h ${minutes}m`
 }
 
+function dataDir(): string {
+  const xdg = process.env.XDG_DATA_HOME
+  return join(xdg && xdg.length > 0 ? xdg : join(homedir(), ".local", "share"), "opencode")
+}
+
 function jwtExpiry(token: string): number {
   const payload = token.split(".")[1]
   if (!payload) return 0
@@ -248,7 +253,7 @@ function modelProvider(api: TuiPluginApi, sessionID: string): QuotaProvider | nu
   return null
 }
 
-async function openaiCredentials(api: TuiPluginApi): Promise<Credentials | null> {
+async function openaiCredentials(): Promise<Credentials | null> {
   const now = Date.now()
   try {
     const raw = await readFile(join(homedir(), ".codex", "auth.json"), "utf8")
@@ -258,7 +263,7 @@ async function openaiCredentials(api: TuiPluginApi): Promise<Credentials | null>
     // fall through to opencode auth
   }
   try {
-    const raw = await readFile(join(api.state.path.state, "auth.json"), "utf8")
+    const raw = await readFile(join(dataDir(), "auth.json"), "utf8")
     const auth = JSON.parse(raw) as Record<
       string,
       { type?: string; access?: string; expires?: number; accountId?: string }
@@ -273,8 +278,8 @@ async function openaiCredentials(api: TuiPluginApi): Promise<Credentials | null>
   return null
 }
 
-async function fetchOpenAIQuota(api: TuiPluginApi): Promise<QuotaWindow[] | null> {
-  const credentials = await openaiCredentials(api)
+async function fetchOpenAIQuota(): Promise<QuotaWindow[] | null> {
+  const credentials = await openaiCredentials()
   if (!credentials) return null
   const headers: Record<string, string> = {
     authorization: `Bearer ${credentials.accessToken}`,
@@ -303,10 +308,10 @@ async function fetchOpenAIQuota(api: TuiPluginApi): Promise<QuotaWindow[] | null
   }
 }
 
-async function fetchGoQuota(api: TuiPluginApi): Promise<QuotaWindow[] | null> {
+async function fetchGoQuota(): Promise<QuotaWindow[] | null> {
   let key: string | null = null
   try {
-    const raw = await readFile(join(api.state.path.state, "auth.json"), "utf8")
+    const raw = await readFile(join(dataDir(), "auth.json"), "utf8")
     key = goApiKey(raw, process.env.OPENCODE_API_KEY)
   } catch {
     key = goApiKey("", process.env.OPENCODE_API_KEY)
@@ -365,8 +370,7 @@ function View(props: { api: TuiPluginApi; sessionID: string; options: Resolved }
     let cancelled = false
     let handle: ReturnType<typeof setTimeout> | undefined
     const poll = async () => {
-      const windows =
-        provider === "opencode-go" ? await fetchGoQuota(props.api) : await fetchOpenAIQuota(props.api)
+      const windows = provider === "opencode-go" ? await fetchGoQuota() : await fetchOpenAIQuota()
       if (cancelled) return
       setQuota(windows)
       handle = setTimeout(poll, windows ? POLL_MS : POLL_MS * 3)
@@ -458,6 +462,7 @@ const plugin: TuiPluginModule & { id: string } = {
 
 export {
   codexCredentials,
+  dataDir,
   fmtDuration,
   formatTokens,
   goApiKey,
