@@ -22,6 +22,9 @@ Weekly  ▓░░░░░ 12% · 2d 6h
 - Quota bars for OpenAI/ChatGPT and OpenCode Go subscriptions, colored by usage
   (green under 50%, yellow from 50%, red above 85%), with time to reset.
 - Resolved quota windows disappear once their reset time passes.
+- Disable quota requests with `showQuota: false` while keeping session totals.
+- Token totals tolerate incomplete messages and use compact `K`, `M`, and `B`
+  suffixes, including rounded unit boundaries.
 
 ## Install
 
@@ -70,19 +73,31 @@ Options are the second element of the `tui.json` entry:
 | `showCost`       | `boolean` | `false` | Show cumulative session cost (USD) when non-zero.                           |
 | `showCache`      | `boolean` | `true`  | Show cache read/write tokens when non-zero.                                 |
 | `showReasoning`  | `boolean` | `true`  | Show reasoning tokens when non-zero.                                        |
+| `showQuota`      | `boolean` | `true`  | Fetch and display subscription quota. Set `false` to skip quota credential reads and requests. |
 
 ## Quota
 
 Quota appears under the token totals when the current model's provider is
 `openai` or `opencode-go`; otherwise only token usage is shown.
+The session provider takes precedence. The optional `api.model.current()` API
+is used only when the session has no provider ID; an unsupported session
+provider never inherits quota from the prompt provider.
 
 ### ChatGPT / Codex (OpenAI)
 
-Credentials are read from `~/.codex/auth.json` when it contains ChatGPT
+Credentials are read from `${CODEX_HOME}/auth.json` (or `~/.codex/auth.json`
+when `CODEX_HOME` is unset or empty) when it contains ChatGPT
 (`auth_mode: "chatgpt"`) tokens, falling back to the `openai` entry in
 OpenCode's `auth.json`. The plugin calls the ChatGPT usage endpoint with a
 `codex-cli` user agent and shows up to two windows (primary and secondary),
 labeled `5h` / `Daily` / `Weekly` / `Monthly` from the window length.
+OpenCode authentication is read from `${XDG_DATA_HOME}/opencode/auth.json`,
+defaulting to `~/.local/share/opencode/auth.json`.
+
+Malformed credentials and whitespace-bearing tokens are rejected. OpenCode's
+explicit expiration and readable positive JWT expiration claims must be more
+than 60 seconds away. The plugin does not refresh tokens or modify authentication
+files; without a usable credential it omits quota.
 
 ### OpenCode Go
 
@@ -92,6 +107,9 @@ endpoint and shows the `5h` (rolling), `Weekly`, and `Monthly` windows.
 
 Quota is refreshed every 2 minutes (6 minutes after a failed fetch); requests
 time out after 10 seconds, and expired windows are hidden immediately.
+Switching providers clears old quota and aborts outstanding requests; unmounting
+the sidebar also aborts requests and stops polling. Authenticated requests reject
+redirects. Failed requests hide quota while session token totals remain visible.
 
 ## Development
 
@@ -100,21 +118,26 @@ suite:
 
 ```sh
 bun install
-bun test        # 18 tests: option parsing, token math, credential and quota parsing
+bun test        # helper and rendered-sidebar regression tests
 bun run typecheck
 ```
 
 The pure helpers (`resolveOptions`, `summarize`, `formatTokens`, `fmtDuration`,
-`jwtExpiry`, `codexCredentials`, `parseWhamWindow`, `goApiKey`, `parseGoUsage`)
+`jwtExpiry`, `codexCredentials`, `opencodeCredentials`, `parseWhamWindow`,
+`goApiKey`, `parseGoUsage`)
 are exported for testing.
+
+The tests use temporary credential directories and mocked HTTP requests. See
+[TDD.md](TDD.md) for the technical design and acceptance criteria, and
+[TEST-REPORT.md](TEST-REPORT.md) for verification results and exact test mappings.
 
 ## Caveats
 
 - The ChatGPT usage endpoint is not a public API and may change without notice.
 - Without usable credentials the quota section is simply omitted; token usage
   still works.
-- On stock OpenCode the provider is taken from the session model; a build that
-  exposes `api.model.current()` is preferred when available.
+- On stock OpenCode, quota requires a provider ID on the session model. Builds
+  exposing `api.model.current()` can also show quota before the session has one.
 
 ## License
 
