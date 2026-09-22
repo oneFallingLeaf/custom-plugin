@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test"
 import type { AssistantMessage, Message } from "@opencode-ai/sdk/v2"
+import { homedir } from "node:os"
+import { join } from "node:path"
 import {
   codexCredentials,
+  dataDir,
   fmtDuration,
   formatTokens,
   goApiKey,
@@ -131,6 +134,21 @@ test("fmtDuration formats hours, minutes and days", () => {
   expect(fmtDuration(3_600_000)).toBe("1h 0m")
   expect(fmtDuration(11_040_000)).toBe("3h 4m")
   expect(fmtDuration(126_000_000)).toBe("1d 11h")
+})
+
+test("dataDir follows OpenCode's XDG data directory", () => {
+  const previous = process.env.XDG_DATA_HOME
+  try {
+    process.env.XDG_DATA_HOME = "/tmp/xdg-data"
+    expect(dataDir()).toBe(join("/tmp/xdg-data", "opencode"))
+    process.env.XDG_DATA_HOME = ""
+    expect(dataDir()).toBe(join(homedir(), ".local", "share", "opencode"))
+    delete process.env.XDG_DATA_HOME
+    expect(dataDir()).toBe(join(homedir(), ".local", "share", "opencode"))
+  } finally {
+    if (previous === undefined) delete process.env.XDG_DATA_HOME
+    else process.env.XDG_DATA_HOME = previous
+  }
 })
 
 test("jwtExpiry reads exp and tolerates junk", () => {
