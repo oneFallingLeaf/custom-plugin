@@ -232,13 +232,20 @@ function goApiKey(raw: string, env?: string | undefined): string | null {
   return typeof env === "string" && env ? env : null
 }
 
-function modelProvider(api: TuiPluginApi, sessionID: string): string | undefined {
-  const local = (
-    api as unknown as { model?: { current?: () => ModelRef | undefined } }
-  ).model?.current?.()
-  if (local?.providerID) return local.providerID
-  const session = api.state.session.get(sessionID) as unknown as { model?: ModelRef } | undefined
-  return session?.model?.providerID
+function sessionModel(api: TuiPluginApi, sessionID: string): ModelRef | undefined {
+  return (api.state.session.get(sessionID) as unknown as { model?: ModelRef } | undefined)?.model
+}
+
+function promptModel(api: TuiPluginApi): ModelRef | undefined {
+  return (api as unknown as { model?: { current?: () => ModelRef | undefined } }).model?.current?.()
+}
+
+function modelProvider(api: TuiPluginApi, sessionID: string): QuotaProvider | null {
+  for (const candidate of [sessionModel(api, sessionID), promptModel(api)]) {
+    if (candidate?.providerID === "openai") return "openai"
+    if (candidate?.providerID === "opencode-go") return "opencode-go"
+  }
+  return null
 }
 
 async function openaiCredentials(api: TuiPluginApi): Promise<Credentials | null> {
@@ -336,10 +343,8 @@ function View(props: { api: TuiPluginApi; sessionID: string; options: Resolved }
   const messages = createMemo(() => props.api.state.session.messages(props.sessionID))
   const summary = createMemo(() => summarize(messages()))
   const quotaProvider = createMemo<QuotaProvider | null>(() => {
-    const provider = modelProvider(props.api, props.sessionID)
-    if (provider === "openai") return "openai"
-    if (provider === "opencode-go") return "opencode-go"
-    return null
+    now()
+    return modelProvider(props.api, props.sessionID)
   })
   const quotaTitle = createMemo(() =>
     quotaProvider() === "opencode-go" ? "OpenCode Go" : "OpenAI",
