@@ -140,4 +140,4 @@ Options are the second element of the `tui.json` entry:
 
 ## License
 
-MIT
+GPL-2.0-only. See [LICENSE](LICENSE).

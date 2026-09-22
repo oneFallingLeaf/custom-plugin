@@ -181,4 +181,4 @@ fixed each interaction.
 
 ## License
 
-MIT
+GPL-2.0-only. See [LICENSE](LICENSE).

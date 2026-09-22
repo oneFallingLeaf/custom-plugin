@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "OpenCode TUI plugin: live per-session token usage in the sidebar, plus ChatGPT/Codex or OpenCode Go quota while the session model belongs to that provider.",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-2.0-only",
   "exports": {
     "./tui": "./tui/token-usage.tsx"
   },

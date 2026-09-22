@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "OpenCode TUI plugin: a searchable model list in the session sidebar, below LSP.",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-2.0-only",
   "exports": {
     "./tui": "./tui/model-sidebar.tsx"
   },

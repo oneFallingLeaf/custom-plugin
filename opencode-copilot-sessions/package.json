@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "OpenCode TUI plugin: press left arrow to open a Copilot-style sessions panel and switch sessions.",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-2.0-only",
   "exports": {
     "./tui": "./tui/sessions.tsx"
   },
