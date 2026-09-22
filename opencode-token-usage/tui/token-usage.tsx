@@ -3,8 +3,9 @@
  * Token usage (TUI plugin)
  *
  * Adds a live per-session token usage section to the session sidebar, and
- * shows ChatGPT/Codex subscription quota only while the session model is an
- * OpenAI model.
+ * shows subscription quota for the current provider: ChatGPT/Codex while the
+ * session model is an OpenAI model, OpenCode Go while it is an opencode-go
+ * model.
  *
  * Register from `~/.config/opencode/tui.json`:
  *
@@ -35,6 +36,7 @@ const POLL_MS = 120_000
 const FETCH_TIMEOUT_MS = 10_000
 const EXPIRY_MARGIN_MS = 60_000
 const OPENAI_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+const OPENCODE_GO_USAGE_URL = "https://opencode.ai/zen/go/v1/usage"
 
 type Options = {
   enabled?: boolean
@@ -63,10 +65,14 @@ type Summary = {
   cost: number
 }
 
+type QuotaProvider = "openai" | "opencode-go"
+
+type QuotaLabel = "5h" | "Daily" | "Weekly" | "Monthly"
+
 type QuotaWindow = {
   percent: number
   resetsAt: number
-  label?: "Daily" | "Weekly"
+  label?: QuotaLabel
 }
 
 type Credentials = {
@@ -161,12 +167,21 @@ function codexCredentials(raw: string, now: number): Credentials | null {
   }
 }
 
+function quotaLabelForSeconds(seconds: unknown): QuotaLabel | undefined {
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) return undefined
+  if (seconds <= 6 * 60 * 60) return "5h"
+  if (seconds <= 2 * 24 * 60 * 60) return "Daily"
+  if (seconds <= 8 * 24 * 60 * 60) return "Weekly"
+  return "Monthly"
+}
+
 function parseWhamWindow(window: unknown, now: number): QuotaWindow | null {
   if (!window || typeof window !== "object") return null
   const value = window as {
     used_percent?: unknown
     reset_at?: unknown
     reset_after_seconds?: unknown
+    limit_window_seconds?: unknown
   }
   if (typeof value.used_percent !== "number" || !Number.isFinite(value.used_percent)) return null
   const resetsAt =
@@ -177,7 +192,44 @@ function parseWhamWindow(window: unknown, now: number): QuotaWindow | null {
         ? now + value.reset_after_seconds * 1000
         : undefined
   if (resetsAt === undefined) return null
-  return { percent: Math.min(100, Math.max(0, value.used_percent)), resetsAt }
+  const label = quotaLabelForSeconds(value.limit_window_seconds)
+  return {
+    percent: Math.min(100, Math.max(0, value.used_percent)),
+    resetsAt,
+    ...(label ? { label } : {}),
+  }
+}
+
+function parseGoWindow(window: unknown, label: QuotaLabel): QuotaWindow | null {
+  if (!window || typeof window !== "object") return null
+  const value = window as { percent?: unknown; resetsAt?: unknown }
+  if (typeof value.percent !== "number" || !Number.isFinite(value.percent)) return null
+  const resetsAt = typeof value.resetsAt === "string" ? Date.parse(value.resetsAt) : Number.NaN
+  if (!Number.isFinite(resetsAt)) return null
+  return { percent: Math.min(100, Math.max(0, value.percent)), resetsAt, label }
+}
+
+function parseGoUsage(payload: unknown): QuotaWindow[] {
+  if (!payload || typeof payload !== "object") return []
+  const usage = (payload as { usage?: unknown }).usage
+  if (!usage || typeof usage !== "object") return []
+  const value = usage as { rolling?: unknown; weekly?: unknown; monthly?: unknown }
+  return [
+    parseGoWindow(value.rolling, "5h"),
+    parseGoWindow(value.weekly, "Weekly"),
+    parseGoWindow(value.monthly, "Monthly"),
+  ].flatMap((window) => (window ? [window] : []))
+}
+
+function goApiKey(raw: string, env?: string | undefined): string | null {
+  try {
+    const auth = JSON.parse(raw) as Record<string, { key?: unknown }>
+    const key = auth["opencode-go"]?.key
+    if (typeof key === "string" && key) return key
+  } catch {
+    // fall through to the environment
+  }
+  return typeof env === "string" && env ? env : null
 }
 
 function modelProvider(api: TuiPluginApi, sessionID: string): string | undefined {
@@ -233,9 +285,36 @@ async function fetchOpenAIQuota(api: TuiPluginApi): Promise<QuotaWindow[] | null
     }
     const now = Date.now()
     const windows = [
-      { label: "Daily" as const, window: parseWhamWindow(data.rate_limit?.primary_window, now) },
-      { label: "Weekly" as const, window: parseWhamWindow(data.rate_limit?.secondary_window, now) },
-    ].flatMap(({ label, window }) => (window ? [{ ...window, label }] : []))
+      { fallback: "Daily" as const, window: parseWhamWindow(data.rate_limit?.primary_window, now) },
+      { fallback: "Weekly" as const, window: parseWhamWindow(data.rate_limit?.secondary_window, now) },
+    ].flatMap(({ fallback, window }) =>
+      window ? [{ ...window, label: window.label ?? fallback }] : [],
+    )
+    return windows.length > 0 ? windows : null
+  } catch {
+    return null
+  }
+}
+
+async function fetchGoQuota(api: TuiPluginApi): Promise<QuotaWindow[] | null> {
+  let key: string | null = null
+  try {
+    const raw = await readFile(join(api.state.path.state, "auth.json"), "utf8")
+    key = goApiKey(raw, process.env.OPENCODE_API_KEY)
+  } catch {
+    key = goApiKey("", process.env.OPENCODE_API_KEY)
+  }
+  if (!key) return null
+  try {
+    const response = await fetch(OPENCODE_GO_USAGE_URL, {
+      headers: {
+        authorization: `Bearer ${key}`,
+        "user-agent": "opencode-token-usage",
+      },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    })
+    if (!response.ok) return null
+    const windows = parseGoUsage(await response.json())
     return windows.length > 0 ? windows : null
   } catch {
     return null
@@ -256,21 +335,33 @@ function View(props: { api: TuiPluginApi; sessionID: string; options: Resolved }
 
   const messages = createMemo(() => props.api.state.session.messages(props.sessionID))
   const summary = createMemo(() => summarize(messages()))
-  const isOpenAI = createMemo(() => modelProvider(props.api, props.sessionID) === "openai")
-  const active = createMemo(() => (quota() ?? []).filter((window) => window.resetsAt > now()))
+  const quotaProvider = createMemo<QuotaProvider | null>(() => {
+    const provider = modelProvider(props.api, props.sessionID)
+    if (provider === "openai") return "openai"
+    if (provider === "opencode-go") return "opencode-go"
+    return null
+  })
+  const quotaTitle = createMemo(() =>
+    quotaProvider() === "opencode-go" ? "OpenCode Go" : "OpenAI",
+  )
+  const active = createMemo(() =>
+    quotaProvider() ? (quota() ?? []).filter((window) => window.resetsAt > now()) : [],
+  )
 
   const clock = setInterval(() => setNow(Date.now()), 1_000)
   onCleanup(() => clearInterval(clock))
 
   createEffect(() => {
-    if (!isOpenAI()) {
+    const provider = quotaProvider()
+    if (!provider) {
       setQuota(null)
       return
     }
     let cancelled = false
     let handle: ReturnType<typeof setTimeout> | undefined
     const poll = async () => {
-      const windows = await fetchOpenAIQuota(props.api)
+      const windows =
+        provider === "opencode-go" ? await fetchGoQuota(props.api) : await fetchOpenAIQuota(props.api)
       if (cancelled) return
       setQuota(windows)
       handle = setTimeout(poll, windows ? POLL_MS : POLL_MS * 3)
@@ -312,9 +403,9 @@ function View(props: { api: TuiPluginApi; sessionID: string; options: Resolved }
         <Show when={props.options.showCost && summary().cost > 0}>
           <text fg={theme().textMuted}>{money.format(summary().cost)}</text>
         </Show>
-        <Show when={isOpenAI() && active().length > 0}>
+        <Show when={active().length > 0}>
           <box flexDirection="column">
-            <text fg={theme().textMuted}>OpenAI</text>
+            <text fg={theme().textMuted}>{quotaTitle()}</text>
             <For each={active()}>
               {(window, index) => {
                 const percent = () => Math.round(window.percent)
@@ -364,10 +455,12 @@ export {
   codexCredentials,
   fmtDuration,
   formatTokens,
+  goApiKey,
   jwtExpiry,
+  parseGoUsage,
   parseWhamWindow,
   resolveOptions,
   summarize,
 }
-export type { Credentials, Options, QuotaWindow, Resolved, Summary }
+export type { Credentials, Options, QuotaLabel, QuotaWindow, Resolved, Summary }
 export default plugin

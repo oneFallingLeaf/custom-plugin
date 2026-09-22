@@ -4,7 +4,9 @@ import {
   codexCredentials,
   fmtDuration,
   formatTokens,
+  goApiKey,
   jwtExpiry,
+  parseGoUsage,
   parseWhamWindow,
   resolveOptions,
   summarize,
@@ -187,4 +189,70 @@ test("parseWhamWindow clamps percent and rejects incomplete windows", () => {
   expect(parseWhamWindow({ reset_at: 1 }, 0)).toBeNull()
   expect(parseWhamWindow({ used_percent: 10 }, 0)).toBeNull()
   expect(parseWhamWindow(null, 0)).toBeNull()
+})
+
+test("parseWhamWindow labels windows from limit_window_seconds", () => {
+  expect(
+    parseWhamWindow({ used_percent: 42, reset_at: 1_700_000_000, limit_window_seconds: 18_000 }, 0)
+      ?.label,
+  ).toBe("5h")
+  expect(
+    parseWhamWindow({ used_percent: 42, reset_at: 1_700_000_000, limit_window_seconds: 86_400 }, 0)
+      ?.label,
+  ).toBe("Daily")
+  expect(
+    parseWhamWindow({ used_percent: 42, reset_at: 1_700_000_000, limit_window_seconds: 604_800 }, 0)
+      ?.label,
+  ).toBe("Weekly")
+  expect(
+    parseWhamWindow({ used_percent: 42, reset_at: 1_700_000_000, limit_window_seconds: 2_592_000 }, 0)
+      ?.label,
+  ).toBe("Monthly")
+  expect(parseWhamWindow({ used_percent: 42, reset_at: 1_700_000_000 }, 0)?.label).toBeUndefined()
+})
+
+test("goApiKey reads the opencode-go auth entry", () => {
+  const raw = JSON.stringify({
+    "opencode-go": { type: "api", key: "sk-go" },
+    opencode: { type: "api", key: "sk-zen" },
+  })
+  expect(goApiKey(raw)).toBe("sk-go")
+})
+
+test("goApiKey falls back to OPENCODE_API_KEY and rejects missing keys", () => {
+  expect(goApiKey("not json", "sk-env")).toBe("sk-env")
+  expect(goApiKey(JSON.stringify({ opencode: { key: "sk-zen" } }), undefined)).toBeNull()
+  expect(goApiKey(JSON.stringify({ "opencode-go": { type: "api" } }), "")).toBeNull()
+  expect(goApiKey(JSON.stringify({ "opencode-go": { key: "" } }), undefined)).toBeNull()
+})
+
+test("parseGoUsage maps rolling, weekly and monthly windows", () => {
+  const payload = {
+    usage: {
+      rolling: { status: "ok", percent: 31, resetsAt: "2026-09-22T05:24:25.981Z" },
+      weekly: { status: "ok", percent: 13, resetsAt: "2026-09-28T00:00:00.000Z" },
+      monthly: { status: "rate-limited", percent: 54, resetsAt: "2026-10-12T20:59:47.000Z" },
+    },
+  }
+  expect(parseGoUsage(payload)).toEqual([
+    { percent: 31, resetsAt: Date.parse("2026-09-22T05:24:25.981Z"), label: "5h" },
+    { percent: 13, resetsAt: Date.parse("2026-09-28T00:00:00.000Z"), label: "Weekly" },
+    { percent: 54, resetsAt: Date.parse("2026-10-12T20:59:47.000Z"), label: "Monthly" },
+  ])
+})
+
+test("parseGoUsage clamps percent and skips invalid windows", () => {
+  expect(
+    parseGoUsage({ usage: { rolling: { percent: 120, resetsAt: "2026-09-22T05:24:25.981Z" } } })[0]
+      ?.percent,
+  ).toBe(100)
+  expect(
+    parseGoUsage({ usage: { weekly: { percent: -5, resetsAt: "2026-09-28T00:00:00.000Z" } } })[0]
+      ?.percent,
+  ).toBe(0)
+  expect(parseGoUsage({ usage: { monthly: { resetsAt: "2026-10-12T20:59:47.000Z" } } })).toEqual([])
+  expect(parseGoUsage({ usage: { rolling: { percent: 10, resetsAt: "garbage" } } })).toEqual([])
+  expect(parseGoUsage({ usage: { rolling: null, weekly: "nope" } })).toEqual([])
+  expect(parseGoUsage({})).toEqual([])
+  expect(parseGoUsage(null)).toEqual([])
 })
