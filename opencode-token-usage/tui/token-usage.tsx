@@ -22,6 +22,7 @@
  *   showCost       show cumulative session cost (default false)
  *   showCache      show cache read/write tokens (default true)
  *   showReasoning  show reasoning tokens when present (default true)
+ *   showQuota      fetch and display subscription quota (default true)
  */
 import type { Message } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
@@ -45,6 +46,7 @@ type Options = {
   showCost?: boolean
   showCache?: boolean
   showReasoning?: boolean
+  showQuota?: boolean
 }
 
 type Resolved = {
@@ -53,6 +55,7 @@ type Resolved = {
   showCost: boolean
   showCache: boolean
   showReasoning: boolean
+  showQuota: boolean
 }
 
 type Summary = {
@@ -85,14 +88,19 @@ type ModelRef = { providerID?: string; modelID?: string }
 function resolveOptions(input: Options | undefined): Resolved {
   return {
     order:
-      typeof input?.order === "number" && Number.isFinite(input.order) && input.order > 0
+      typeof input?.order === "number" && Number.isFinite(input.order) && input.order >= 1
         ? Math.floor(input.order)
         : DEFAULT_ORDER,
     startCollapsed: input?.startCollapsed === true,
     showCost: input?.showCost === true,
     showCache: input?.showCache !== false,
     showReasoning: input?.showReasoning !== false,
+    showQuota: input?.showQuota !== false,
   }
+}
+
+function nonnegative(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0
 }
 
 function summarize(messages: ReadonlyArray<Message>): Summary {
@@ -108,12 +116,12 @@ function summarize(messages: ReadonlyArray<Message>): Summary {
   for (const message of messages) {
     if (message.role !== "assistant") continue
     summary.requests += 1
-    summary.cost += message.cost ?? 0
-    summary.input += message.tokens.input
-    summary.output += message.tokens.output
-    summary.reasoning += message.tokens.reasoning
-    summary.cacheRead += message.tokens.cache.read
-    summary.cacheWrite += message.tokens.cache.write
+    summary.cost += nonnegative(message.cost)
+    summary.input += nonnegative(message.tokens?.input)
+    summary.output += nonnegative(message.tokens?.output)
+    summary.reasoning += nonnegative(message.tokens?.reasoning)
+    summary.cacheRead += nonnegative(message.tokens?.cache?.read)
+    summary.cacheWrite += nonnegative(message.tokens?.cache?.write)
   }
   return summary
 }
@@ -121,9 +129,14 @@ function summarize(messages: ReadonlyArray<Message>): Summary {
 function formatTokens(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0"
   if (value < 1_000) return String(Math.floor(value))
-  const unit = value >= 1_000_000 ? "M" : "K"
-  const divisor = value >= 1_000_000 ? 1_000_000 : 1_000
-  return (value / divisor).toFixed(1).replace(/\.0$/, "") + unit
+  const units = ["K", "M", "B"]
+  let scaled = value / 1_000
+  let unit = 0
+  while (Math.round(scaled * 10) / 10 >= 1_000 && unit < units.length - 1) {
+    scaled /= 1_000
+    unit += 1
+  }
+  return scaled.toFixed(1).replace(/\.0$/, "") + units[unit]
 }
 
 function fmtDuration(ms: number): string {
@@ -147,10 +160,14 @@ function jwtExpiry(token: string): number {
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
       exp?: unknown
     }
-    return typeof claims.exp === "number" ? claims.exp : 0
+    return typeof claims.exp === "number" && Number.isFinite(claims.exp) ? claims.exp : 0
   } catch {
     return 0
   }
+}
+
+function credentialString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && !/\s/.test(value) ? value : undefined
 }
 
 function codexCredentials(raw: string, now: number): Credentials | null {
@@ -160,12 +177,36 @@ function codexCredentials(raw: string, now: number): Credentials | null {
       tokens?: { access_token?: unknown; account_id?: unknown }
     }
     if (parsed.auth_mode !== "chatgpt") return null
-    const accessToken = parsed.tokens?.access_token
-    if (typeof accessToken !== "string" || !accessToken) return null
+    const accessToken = credentialString(parsed.tokens?.access_token)
+    if (!accessToken) return null
     const exp = jwtExpiry(accessToken)
     if (exp > 0 && exp * 1000 <= now + EXPIRY_MARGIN_MS) return null
-    const accountId =
-      typeof parsed.tokens?.account_id === "string" ? parsed.tokens.account_id : undefined
+    const accountId = credentialString(parsed.tokens?.account_id)
+    return { accessToken, ...(accountId ? { accountId } : {}) }
+  } catch {
+    return null
+  }
+}
+
+function opencodeCredentials(raw: string, now: number): Credentials | null {
+  try {
+    const auth = JSON.parse(raw) as Record<
+      string,
+      { type?: unknown; access?: unknown; expires?: unknown; accountId?: unknown }
+    >
+    const entry = auth.openai
+    if (!entry || (entry.type !== undefined && entry.type !== "oauth")) return null
+    const accessToken = credentialString(entry.access)
+    if (!accessToken) return null
+    if (
+      entry.expires !== undefined &&
+      (typeof entry.expires !== "number" ||
+        !Number.isFinite(entry.expires) ||
+        entry.expires <= now + EXPIRY_MARGIN_MS)
+    ) return null
+    const exp = jwtExpiry(accessToken)
+    if (exp > 0 && exp * 1000 <= now + EXPIRY_MARGIN_MS) return null
+    const accountId = credentialString(entry.accountId)
     return { accessToken, ...(accountId ? { accountId } : {}) }
   } catch {
     return null
@@ -196,7 +237,7 @@ function parseWhamWindow(window: unknown, now: number): QuotaWindow | null {
           Number.isFinite(value.reset_after_seconds)
         ? now + value.reset_after_seconds * 1000
         : undefined
-  if (resetsAt === undefined) return null
+  if (resetsAt === undefined || !Number.isFinite(resetsAt)) return null
   const label = quotaLabelForSeconds(value.limit_window_seconds)
   return {
     percent: Math.min(100, Math.max(0, value.used_percent)),
@@ -229,12 +270,12 @@ function parseGoUsage(payload: unknown): QuotaWindow[] {
 function goApiKey(raw: string, env?: string | undefined): string | null {
   try {
     const auth = JSON.parse(raw) as Record<string, { key?: unknown }>
-    const key = auth["opencode-go"]?.key
-    if (typeof key === "string" && key) return key
+    const key = credentialString(auth["opencode-go"]?.key)
+    if (key) return key
   } catch {
     // fall through to the environment
   }
-  return typeof env === "string" && env ? env : null
+  return credentialString(env) ?? null
 }
 
 function sessionModel(api: TuiPluginApi, sessionID: string): ModelRef | undefined {
@@ -246,17 +287,14 @@ function promptModel(api: TuiPluginApi): ModelRef | undefined {
 }
 
 function modelProvider(api: TuiPluginApi, sessionID: string): QuotaProvider | null {
-  for (const candidate of [sessionModel(api, sessionID), promptModel(api)]) {
-    if (candidate?.providerID === "openai") return "openai"
-    if (candidate?.providerID === "opencode-go") return "opencode-go"
-  }
-  return null
+  const provider = sessionModel(api, sessionID)?.providerID ?? promptModel(api)?.providerID
+  return provider === "openai" || provider === "opencode-go" ? provider : null
 }
 
 async function openaiCredentials(): Promise<Credentials | null> {
   const now = Date.now()
   try {
-    const raw = await readFile(join(homedir(), ".codex", "auth.json"), "utf8")
+    const raw = await readFile(join(process.env.CODEX_HOME || join(homedir(), ".codex"), "auth.json"), "utf8")
     const codex = codexCredentials(raw, now)
     if (codex) return codex
   } catch {
@@ -264,23 +302,16 @@ async function openaiCredentials(): Promise<Credentials | null> {
   }
   try {
     const raw = await readFile(join(dataDir(), "auth.json"), "utf8")
-    const auth = JSON.parse(raw) as Record<
-      string,
-      { type?: string; access?: string; expires?: number; accountId?: string }
-    >
-    const entry = auth["openai"]
-    if (entry?.access && !(entry.expires && now >= entry.expires)) {
-      return { accessToken: entry.access, ...(entry.accountId ? { accountId: entry.accountId } : {}) }
-    }
+    return opencodeCredentials(raw, now)
   } catch {
     // no usable credentials
   }
   return null
 }
 
-async function fetchOpenAIQuota(): Promise<QuotaWindow[] | null> {
+async function fetchOpenAIQuota(signal: AbortSignal): Promise<QuotaWindow[] | null> {
   const credentials = await openaiCredentials()
-  if (!credentials) return null
+  if (!credentials || signal.aborted) return null
   const headers: Record<string, string> = {
     authorization: `Bearer ${credentials.accessToken}`,
     "user-agent": "codex-cli",
@@ -289,7 +320,8 @@ async function fetchOpenAIQuota(): Promise<QuotaWindow[] | null> {
   try {
     const response = await fetch(OPENAI_USAGE_URL, {
       headers,
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      redirect: "error",
+      signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]),
     })
     if (!response.ok) return null
     const data = (await response.json()) as {
@@ -308,7 +340,7 @@ async function fetchOpenAIQuota(): Promise<QuotaWindow[] | null> {
   }
 }
 
-async function fetchGoQuota(): Promise<QuotaWindow[] | null> {
+async function fetchGoQuota(signal: AbortSignal): Promise<QuotaWindow[] | null> {
   let key: string | null = null
   try {
     const raw = await readFile(join(dataDir(), "auth.json"), "utf8")
@@ -316,14 +348,15 @@ async function fetchGoQuota(): Promise<QuotaWindow[] | null> {
   } catch {
     key = goApiKey("", process.env.OPENCODE_API_KEY)
   }
-  if (!key) return null
+  if (!key || signal.aborted) return null
   try {
     const response = await fetch(OPENCODE_GO_USAGE_URL, {
       headers: {
         authorization: `Bearer ${key}`,
         "user-agent": "opencode-token-usage",
       },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      redirect: "error",
+      signal: AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)]),
     })
     if (!response.ok) return null
     const windows = parseGoUsage(await response.json())
@@ -349,7 +382,7 @@ function View(props: { api: TuiPluginApi; sessionID: string; options: Resolved }
   const summary = createMemo(() => summarize(messages()))
   const quotaProvider = createMemo<QuotaProvider | null>(() => {
     now()
-    return modelProvider(props.api, props.sessionID)
+    return props.options.showQuota ? modelProvider(props.api, props.sessionID) : null
   })
   const quotaTitle = createMemo(() =>
     quotaProvider() === "opencode-go" ? "OpenCode Go" : "OpenAI",
@@ -363,14 +396,15 @@ function View(props: { api: TuiPluginApi; sessionID: string; options: Resolved }
 
   createEffect(() => {
     const provider = quotaProvider()
-    if (!provider) {
-      setQuota(null)
-      return
-    }
+    setQuota(null)
+    if (!provider) return
+    const controller = new AbortController()
     let cancelled = false
     let handle: ReturnType<typeof setTimeout> | undefined
     const poll = async () => {
-      const windows = provider === "opencode-go" ? await fetchGoQuota() : await fetchOpenAIQuota()
+      const windows = provider === "opencode-go"
+        ? await fetchGoQuota(controller.signal)
+        : await fetchOpenAIQuota(controller.signal)
       if (cancelled) return
       setQuota(windows)
       handle = setTimeout(poll, windows ? POLL_MS : POLL_MS * 3)
@@ -378,6 +412,7 @@ function View(props: { api: TuiPluginApi; sessionID: string; options: Resolved }
     void poll()
     onCleanup(() => {
       cancelled = true
+      controller.abort()
       if (handle) clearTimeout(handle)
     })
   })
@@ -467,6 +502,7 @@ export {
   formatTokens,
   goApiKey,
   jwtExpiry,
+  opencodeCredentials,
   parseGoUsage,
   parseWhamWindow,
   resolveOptions,
