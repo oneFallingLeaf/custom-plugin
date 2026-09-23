@@ -1,8 +1,9 @@
 # opencode-model-sidebar
 
 An [OpenCode](https://opencode.ai) TUI plugin that puts a **searchable model list
-in the session sidebar**, directly below the built-in LSP / todo / files
-sections.
+in the session sidebar**. On V2 it appends to the `sidebar.content` slot in
+plugin order; placement below the built-in LSP / todo / files sections applies
+only to the legacy V1 plugin.
 
 ```
 ▼ Models 98
@@ -18,14 +19,40 @@ sections.
 - Tabs for your native OpenCode favorites and the full model list.
 - Fuzzy-ish search box: type to filter by model name, provider, or model id.
 - Keyboard and mouse driven.
-- Current model highlighted.
+- Current model highlighted from the TUI selection on a patched host; stock
+  V2 can only show the session's server-side model when available.
 - Selecting a model switches it: double-click its row, or press `enter`. A
   single click only highlights the row.
 - On a patched OpenCode build switching is direct (see
-  [One-click switching](#one-click-switching)); on stock OpenCode it opens the
-  native picker.
+  [Direct switching](#direct-switching)); on stock OpenCode it opens the
+  native picker. `switchMode: "session"` explicitly selects the server-only alternative.
 
 ## Install
+
+### OpenCode V2
+
+The hybrid plugin is exported at `./tui` and as the package entrypoint; its
+`setup()` selects the V2 implementation using `context.app.version`. `./v2`
+exports the V2 implementation directly, while `./v1` exports the V1 plugin.
+Add
+the package directory to the **global** `~/.config/opencode/cli.json` (or
+`$XDG_CONFIG_HOME/opencode/cli.json`). There is no project-local CLI config.
+The example is in [`examples/cli.json`](examples/cli.json):
+
+```json
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": ["/absolute/path/to/opencode-model-sidebar"]
+}
+```
+
+Restart the CLI after adding it. On stock V2, double-clicking/pressing Enter
+opens the native `model.list` picker to complete the switch; the plugin cannot
+set the model used by the next typed prompt directly with the public CLI API.
+If you require a direct switch, the optional V2 patch below adds that
+capability. V1 and V2 implementations are loaded only for their matching hosts.
+
+### OpenCode V1 (legacy)
 
 ### As a local file plugin (recommended)
 
@@ -33,7 +60,7 @@ sections.
 
    ```sh
    mkdir -p ~/.config/opencode/plugins/tui
-   cp tui/model-sidebar.tsx ~/.config/opencode/plugins/tui/
+   cp tui/index.ts tui/model-sidebar.tsx ~/.config/opencode/plugins/tui/
    ```
 
 2. Register it in `~/.config/opencode/tui.json`:
@@ -41,20 +68,24 @@ sections.
    ```json
    {
      "$schema": "https://opencode.ai/tui.json",
-     "plugin": ["./plugins/tui/model-sidebar.tsx"]
+      "plugin": ["./plugins/tui/index.ts"]
    }
    ```
 
 3. Restart OpenCode.
 
 TUI plugins are **not** auto-discovered; they must be listed in `tui.json`.
+The hybrid `tui/index.ts` checks `api.app.version` before loading the V1
+implementation. For a direct V1 entry use `./v1` (or
+`tui/model-sidebar.tsx`); a local-file installation using `index.ts` must
+keep `model-sidebar.tsx` beside it. See [`examples/tui.json`](examples/tui.json).
 
 ### Directly from this repo
 
 ```json
 {
   "$schema": "https://opencode.ai/tui.json",
-  "plugin": ["/absolute/path/to/custom-plugin/tui/model-sidebar.tsx"]
+  "plugin": ["/absolute/path/to/opencode-model-sidebar/tui/index.ts"]
 }
 ```
 
@@ -67,14 +98,16 @@ TUI plugins are **not** auto-discovered; they must be listed in `tui.json`.
 | Move selection      | `up` / `down`, `ctrl+p` / `ctrl+n`            |
 | Page                | `pageup` / `pagedown`, or click `▲/▼ N more`  |
 | Switch tab          | click `Favorites` or `All`                     |
-| Clear filter        | `ctrl+u`                                      |
+| Clear filter        | click search again, or `ctrl+u`               |
 | Switch to model     | `enter` or double-click a row                 |
 | Highlight a row     | single click a row                            |
 | Leave search        | `escape`                                      |
 | Collapse section    | click the `Models` header                     |
 
 While the search is focused it takes over the keyboard; `escape` returns focus
-to the prompt.
+to the prompt. Clicking the search field clears its previous text and hides the
+placeholder so you can start a new search. The search field and selected model
+row have a visible background.
 
 Clicking a row only highlights it; a second click on the same row within 400 ms
 switches the model. **Clicking never moves the list** — the visible window is
@@ -87,21 +120,16 @@ terminal that supports OSC 22 (for example kitty).
 
 ## Configuration
 
-The plugin accepts options as the second element of the `tui.json` entry:
+V2 accepts options in the `cli.json` plugin object:
 
 ```json
 {
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    [
-      "./plugins/tui/model-sidebar.tsx",
-      {
-        "keybind": "ctrl+shift+m",
-        "order": 600,
-        "maxRows": 12,
-        "switchMode": "dialog"
-      }
-    ]
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": [
+    {
+      "package": "/absolute/path/to/opencode-model-sidebar",
+      "options": { "keybind": "ctrl+shift+m", "maxRows": 12, "switchMode": "dialog" }
+    }
   ]
 }
 ```
@@ -109,11 +137,29 @@ The plugin accepts options as the second element of the `tui.json` entry:
 | Option       | Type               | Default         | Description                                                                 |
 | ------------ | ------------------ | --------------- | --------------------------------------------------------------------------- |
 | `keybind`    | `string`           | `ctrl+shift+m`  | Key that focuses the search box.                                            |
-| `order`      | `number`           | `600`           | Sidebar slot order. Built-ins: context `100`, mcp `200`, lsp `300`, todo `400`, files `500`. Use `>500` to sit at the bottom, `350` for directly under LSP. |
 | `maxRows`    | `number`           | `12`            | Visible list rows (the rest scroll via the cursor).                         |
-| `switchMode` | `"dialog"｜"session"` | `"dialog"`   | Fallback when the host does not expose `api.model`. `dialog` opens the native picker; `session` calls `session.switchModel` (session-only, does **not** change the model typed prompts use). |
+| `switchMode` | `"dialog"｜"session"` | `"dialog"`   | On stock V2, `dialog` opens the native picker; `session` calls `session.switchModel` (session-only, does **not** change the TUI model typed prompts use). |
 
-## One-click switching
+V2 appends to `sidebar.content` in plugin order; V1's `order` option is not
+available in V2. Favorites are only displayed when the patched host exposes
+them; stock V2 starts in the All tab and remains usable without a patch.
+
+## Direct switching
+
+The public V2 `@opencode/plugin/tui` context has no client-local model setter
+or favorites accessor. The server's `session.switchModel` is not equivalent to
+changing the TUI model used by a typed prompt. Direct switching/favorites
+therefore require [`patches/opencode-model-api-v2.patch`](patches/opencode-model-api-v2.patch),
+which adds `context.model` to the V2 CLI plugin context. It applies cleanly to
+the pinned upstream **v2.0.12** tag (not a generic patch for all V2 releases).
+The `scripts/opencode-patched` wrapper uses a separate Git worktree and Bun to
+build/cache that patched version; using it is optional. Do not place the
+wrapper on PATH until you have reviewed it and have a source checkout with the
+matching tag. Run the wrapper from this repository with a suitable
+`OPENCODE_PATCHED_SRC` or use the native picker on stock V2. Restart the CLI
+after changing the binary or plugin.
+
+### V1 patch (legacy)
 
 Stock OpenCode 1.18 does **not** expose the TUI-local model (`context/local`) to
 plugins. The model a typed prompt uses lives in TUI-local state, and
@@ -121,7 +167,7 @@ plugins. The model a typed prompt uses lives in TUI-local state, and
 OpenCode the only reliable switch is the native picker, and this plugin opens it
 for you.
 
-To get a real one-click switch, apply
+For the v1 TUI plugin, apply
 [`patches/opencode-model-api.patch`](patches/opencode-model-api.patch), which adds
 `api.model` (`current` / `set` / `recent` / `favorite` / `toggleFavorite`) to the
 TUI plugin API. The plugin detects `api.model.set` at runtime and switches
@@ -155,7 +201,7 @@ Requires [Bun](https://bun.sh). Install dependencies and run the regression suit
 
 ```sh
 bun install
-bun test        # 18 tests: pure helpers + rendered mouse/keyboard behavior
+bun test        # V1 and V2 rendered mouse/keyboard regressions plus V1 pure helpers
 bun run typecheck
 ```
 

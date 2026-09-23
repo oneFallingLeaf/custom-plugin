@@ -53,6 +53,10 @@ To display quota for your **active OpenAI V2 sign-in**, also register the server
 
 Merge these entries into your existing configurations rather than replacing other plugins. The server plugin runs where your OpenCode server runs, including for a remote server; install it and its dependencies on that server. Restart OpenCode's service (`opencode service restart`) and the CLI after configuration changes. The server resolves the active OAuth credential, calls the ChatGPT usage endpoint, and returns **only quota windows** to the CLI. API-key OpenAI connections cannot use this ChatGPT subscription endpoint.
 
+If you also use the model sidebar plugin, put token usage before it in
+`cli.json`'s `plugins` list. This places **Usage** below the built-in **Context**
+section and above **Models**.
+
 Run `bun install` in the package first if loading from the checkout. The package exposes `.` and `./tui` as the same hybrid entrypoint; `tui/index.ts` lets the V2 directory loader discover it (the loader looks for `tui/index`, not just package exports). Register the CLI entry in `cli.json`, and register only the optional quota server entry in `opencode.json(c)`. CLI settings are global, not project-local. Restart OpenCode after installing or editing the plugin.
 
 ### OpenCode V1 (legacy TUI configuration)

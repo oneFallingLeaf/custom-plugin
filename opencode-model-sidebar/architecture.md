@@ -1,5 +1,33 @@
 # Architecture
 
+## V2 migration (current)
+
+The hybrid entrypoint `tui/index.ts` is exported through the package `.` and
+`./tui`. Its `tui(api)` checks `api.app.version` before dynamically importing
+`tui/model-sidebar.tsx` for V1; `setup(ctx)` checks `ctx.app.version` before
+importing `tui/model-sidebar-v2.tsx` for V2. Neither implementation is loaded
+eagerly, and unknown/mismatched majors fail before importing either. Explicit
+`./v1` and `./v2` exports remain available. Configure V1 with `examples/tui.json`
+or V2 with global `cli.json` (see `examples/cli.json`). The V1 architecture
+below remains for `tui/model-sidebar.tsx`, which V2 does not load. V2 uses
+`Plugin.define`, `context.ui.slot({ append: "sidebar.content" })`,
+`context.data.location.model/provider.list`, and a component-owned
+`context.keymap.layer`; its rendered regressions live in
+`test/model-sidebar-v2.test.tsx`.
+
+Stock V2 does not expose the TUI-local model or favorites to CLI plugins.
+When the optional `patches/opencode-model-api-v2.patch` is installed at the
+pinned v2.0.12 tag, `context.model.set/current/favorite` provide direct model
+selection and favorites. Without it the default choice dispatches the native
+`model.list` picker (never a misleading session-only change). The explicit
+`switchMode: "session"` option calls `client.session.switchModel` instead;
+it does not set the next typed prompt's TUI-local model. The V2 host slot
+offers no numeric ordering contract, so the V1 `order` option is not ported.
+Interaction invariants below (hover pointer-only, pinned window, one-line
+rows, double-click) apply to both entrypoints.
+
+## Legacy V1 architecture
+
 `opencode-model-sidebar` is a single-file OpenCode **TUI plugin**
 (`tui/model-sidebar.tsx`) that adds a searchable, clickable model list to the
 session sidebar, directly below the built-in LSP / todo / files sections. This

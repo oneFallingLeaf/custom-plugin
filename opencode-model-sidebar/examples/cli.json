@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": [
+    {
+      "package": "/absolute/path/to/opencode-model-sidebar",
+      "options": {
+        "keybind": "ctrl+shift+m",
+        "maxRows": 12,
+        "switchMode": "dialog"
+      }
+    }
+  ]
+}
