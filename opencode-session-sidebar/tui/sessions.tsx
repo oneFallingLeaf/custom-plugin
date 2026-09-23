@@ -385,5 +385,5 @@ const tui: TuiPlugin = async (api, options) => {
   })
 }
 
-const plugin: TuiPluginModule & { id: string } = { id: "copilot-sessions", tui }
+const plugin: TuiPluginModule & { id: string } = { id: "session-sidebar", tui }
 export default plugin

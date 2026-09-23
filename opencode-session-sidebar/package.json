@@ -1,5 +1,5 @@
 {
-  "name": "opencode-copilot-sessions",
+  "name": "opencode-session-sidebar",
   "version": "0.1.0",
   "description": "OpenCode TUI plugin: collapsible left-edge sessions panel with running status and session switching.",
   "type": "module",
@@ -20,8 +20,7 @@
     "opencode-plugin",
     "tui",
     "sessions",
-    "sidebar",
-    "copilot"
+    "sidebar"
   ],
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.18.0"

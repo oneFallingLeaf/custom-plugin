@@ -17,7 +17,7 @@ plugin({
     build.onResolve({ filter: /^solid-js$/ }, () => ({
       path: fileURLToPath(new URL("../node_modules/solid-js/dist/solid.js", import.meta.url)),
     }))
-    build.onLoad({ filter: /[/\\]opencode-copilot-sessions[/\\](?:tui|test)[/\\].*\.tsx$/ }, async (args) => {
+    build.onLoad({ filter: /[/\\]opencode-session-sidebar[/\\](?:tui|test)[/\\].*\.tsx$/ }, async (args) => {
       const result = await transformAsync(await Bun.file(args.path).text(), {
         filename: args.path,
         configFile: false,

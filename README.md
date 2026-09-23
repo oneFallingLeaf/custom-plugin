@@ -5,7 +5,7 @@ is self-contained, installed on its own, and documented in its own README.
 
 | Plugin                                                 | What it does                                                                            | Docs                                                |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| [opencode-copilot-sessions](opencode-copilot-sessions/) | Collapsible left-edge sessions panel with live running status and session switching.      | [README](opencode-copilot-sessions/README.md)       |
+| [opencode-session-sidebar](opencode-session-sidebar/) | Collapsible left-edge sessions panel with live running status and session switching.      | [README](opencode-session-sidebar/README.md)       |
 | [opencode-model-sidebar](opencode-model-sidebar/)       | Searchable model list in the session sidebar, with one-click switching on patched builds. | [README](opencode-model-sidebar/README.md)          |
 | [opencode-token-usage](opencode-token-usage/)           | Live per-session token usage, plus ChatGPT/Codex and OpenCode Go subscription quota.      | [README](opencode-token-usage/README.md)            |
 
@@ -46,7 +46,7 @@ option reference.
 
 ## Plugins at a glance
 
-### opencode-copilot-sessions
+### opencode-session-sidebar
 
 Click **Sessions** beside the prompt, run `/sessions-panel`, or press `←` while
 the prompt is empty to open the left-edge panel. Type to search session titles,
@@ -78,7 +78,7 @@ Quota windows show a bar, percentage, and time to reset. Options: `order`,
 
 ```
 .
-├── opencode-copilot-sessions/   # plugin, README, LICENSE
+├── opencode-session-sidebar/   # plugin, tests, README, LICENSE
 ├── opencode-model-sidebar/      # plugin, patch, scripts, tests, README
 └── opencode-token-usage/        # plugin, tests, README
 ```

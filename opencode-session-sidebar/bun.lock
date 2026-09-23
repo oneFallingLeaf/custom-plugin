@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "opencode-copilot-sessions",
+      "name": "opencode-session-sidebar",
       "devDependencies": {
         "@babel/core": "7.28.0",
         "@babel/preset-typescript": "7.27.1",
