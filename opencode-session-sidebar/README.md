@@ -17,7 +17,7 @@ Run `bun install` in this checkout and add the package to V1's global `~/.config
 }
 ```
 
-See [`examples/tui.json`](examples/tui.json). A published installation can instead use `"opencode-session-sidebar@0.2.0"` in the V1 `plugin` list once 0.2.0 is published. The V1 package loader uses the `./tui` export, not the V2 CLI config. For a manually installed local package, point V1 at the absolute path of `tui/index.ts` in that installed package; keep its dependencies installed. Do not copy only that file: it dynamically loads `v1.tsx` from the same directory.
+See [`examples/tui.json`](examples/tui.json). An npm installation can instead use `"opencode-session-sidebar@0.2.0"` in the V1 `plugin` list. The V1 package loader uses the `./tui` export, not the V2 CLI config. For a manually installed local package, point V1 at the absolute path of `tui/index.ts` in that installed package; keep its dependencies installed. Do not copy only that file: it dynamically loads `v1.tsx` from the same directory.
 
 ## OpenCode V2
 
@@ -41,8 +41,7 @@ to your checkout:
 
 OpenCode loads the package's `./tui` export automatically. This configuration is local to the CLI and works when connected to a remote OpenCode server. Use `cli.json` for V2 and `tui.json` for V1; do not put this CLI-only plugin in server `opencode.json`. There is no project-local V2 `cli.json`. Restart the CLI after installation. See [CLI plugin installation](https://opencode.ai/v2/docs/cli/plugins).
 
-The source package is prepared as version `0.2.0`, but this version has not
-been published to npm yet. Once published, replace the checkout path with
+Version `0.2.0` is published to npm. Replace the checkout path with
 `"opencode-session-sidebar@0.2.0"`. Alternatively, install it manually with
 `npm install --prefix ~/.config/opencode opencode-session-sidebar@0.2.0` (use
 `$XDG_CONFIG_HOME/opencode` as the prefix if set) and use
@@ -85,4 +84,4 @@ To opt into the former arrow shortcut, add `"openKey": "left"` to this plugin's 
 
 ## Development
 
-Run `bun install`, `bun test`, `bun run typecheck`, and `npm pack --dry-run` from this directory. V1 requires the keymap-backed TUI API (`@opencode-ai/plugin` >= 1.18.0) and OpenTUI >= 0.4.5. V2 requires OpenTUI >= 0.5.10. The 0.2.0 package is not yet published. GPL-2.0-only; see [LICENSE](LICENSE).
+Run `bun install`, `bun test`, `bun run typecheck`, and `npm pack --dry-run` from this directory. V1 requires the keymap-backed TUI API (`@opencode-ai/plugin` >= 1.18.0) and OpenTUI >= 0.4.5. V2 requires OpenTUI >= 0.5.10. GPL-2.0-only; see [LICENSE](LICENSE).
