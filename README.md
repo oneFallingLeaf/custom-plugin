@@ -5,7 +5,7 @@ is self-contained, installed on its own, and documented in its own README.
 
 | Plugin                                                 | What it does                                                                            | Docs                                                |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| [opencode-copilot-sessions](opencode-copilot-sessions/) | GitHub Copilot CLI-style session switching: `←` opens a Sessions panel, `→` closes it.   | [README](opencode-copilot-sessions/README.md)       |
+| [opencode-copilot-sessions](opencode-copilot-sessions/) | Collapsible left-edge sessions panel with live running status and session switching.      | [README](opencode-copilot-sessions/README.md)       |
 | [opencode-model-sidebar](opencode-model-sidebar/)       | Searchable model list in the session sidebar, with one-click switching on patched builds. | [README](opencode-model-sidebar/README.md)          |
 | [opencode-token-usage](opencode-token-usage/)           | Live per-session token usage, plus ChatGPT/Codex and OpenCode Go subscription quota.      | [README](opencode-token-usage/README.md)            |
 
@@ -48,10 +48,14 @@ option reference.
 
 ### opencode-copilot-sessions
 
-Press `←` while the prompt is empty and a **Sessions** panel opens with focus;
-move with `↑`/`↓`, switch with `Enter`, close with `→`/`Escape`. Running sessions
-are grouped and the current session is marked. Configure `openKey`, `closeKey`,
-`requireEmptyPrompt`, `scope`, `limit`, `showStatus`, and `enabled`.
+Click **Sessions** beside the prompt, run `/sessions-panel`, or press `←` while
+the prompt is empty to open the left-edge panel. Type to search session titles,
+use `Backspace` to edit or `Ctrl+U` to clear. Move with `↑`/`↓`, switch with
+`Enter` or click a session, and collapse with `→`/`Escape` or `×`. Running
+sessions are grouped and the current session is marked. The panel overlays the
+left edge while open because the host does not expose a width-reserving left
+sidebar slot. Configure `openKey`, `closeKey`, `requireEmptyPrompt`, `scope`,
+`limit`, `showStatus`, and `enabled`.
 
 ### opencode-model-sidebar
 
