@@ -1,0 +1,51 @@
+diff --git a/packages/plugin/src/tui/context.ts b/packages/plugin/src/tui/context.ts
+--- a/packages/plugin/src/tui/context.ts
++++ b/packages/plugin/src/tui/context.ts
+@@ -507,6 +507,14 @@ export interface Context {
+   readonly options: Readonly<Record<string, any>>
+   readonly location: LocationRef | undefined
+   readonly app: App
++  /** The client-local model used by the next typed prompt. */
++  readonly model: {
++    current(): { providerID: string; modelID: string } | undefined
++    set(model: { providerID: string; modelID: string }, options?: { recent?: boolean }): void
++    recent(): readonly { providerID: string; modelID: string }[]
++    favorite(): readonly { providerID: string; modelID: string }[]
++    toggleFavorite(model: { providerID: string; modelID: string }): void
++  }
+   readonly renderer: CliRenderer
+   readonly client: OpenCodeClient
+   readonly data: Data
+diff --git a/packages/tui/src/plugin/api.tsx b/packages/tui/src/plugin/api.tsx
+--- a/packages/tui/src/plugin/api.tsx
++++ b/packages/tui/src/plugin/api.tsx
+@@ -10,6 +10,7 @@ import { Keymap } from "../context/keymap"
+ import { useRoute } from "../context/route"
+ import { useTuiApp, useTuiPaths } from "../context/runtime"
+ import { useLocation } from "../context/location"
++import { useLocal } from "../context/local"
+ import { useThemes } from "../context/theme"
+ import { DialogAlert } from "../ui/dialog-alert"
+ import { DialogConfirm } from "../ui/dialog-confirm"
+@@ -63,6 +64,7 @@ export function usePluginHost() {
+     app: useTuiApp(),
+     paths: useTuiPaths(),
+     location: useLocation(),
++    local: useLocal(),
+     themes: useThemes(),
+     dialog: useDialog(),
+     toast: useToast(),
+@@ -137,6 +139,13 @@ export function createPluginContext(input: {
+       return host.location.current
+     },
+     app: { version: host.app.version, channel: host.app.channel },
++    model: {
++      current: () => host.local.model.current(),
++      set: (model, options) => host.local.model.set(model, options),
++      recent: () => host.local.model.recent(),
++      favorite: () => host.local.model.favorite(),
++      toggleFavorite: (model) => host.local.model.toggleFavorite(model),
++    },
+     renderer: host.renderer,
+     client: host.client.api,
+     data: host.data,

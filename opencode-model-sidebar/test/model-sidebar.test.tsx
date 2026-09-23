@@ -73,7 +73,7 @@ async function mount(options?: {
 
   const api = {
     theme: {
-      current: { text: "#ffffff", textMuted: "#808080", accent: "#00aaff", success: "#00ff00" },
+      current: { text: "#ffffff", textMuted: "#808080", accent: "#00aaff", success: "#00ff00", backgroundElement: "#333333" },
     },
     state: {
       provider: providers,
@@ -177,6 +177,27 @@ test("single click highlights but does not switch the model", async () => {
   await setup.renderOnce()
 
   expect(setCalls).toEqual([{ providerID: "acme", modelID: "model-03" }])
+})
+
+test("clicking search clears the previous filter and highlights the selected row", async () => {
+  const { setup } = await mount()
+  const search = lineY(setup, "Search models")
+  const background = (text: string) => setup.captureSpans().lines[lineY(setup, text)]!.spans
+    .find((span) => span.text.includes(text))!.bg.toInts().slice(0, 3)
+  expect(background("Search models")).toEqual([51, 51, 51])
+  await setup.mockMouse.click(3, search)
+  setup.mockInput.typeText("02")
+  await setup.renderOnce()
+  expect(frame(setup)).not.toContain("Model 00")
+  await setup.mockMouse.click(3, search)
+  await setup.renderOnce()
+  expect(frame(setup)).toContain("⌕ █")
+  expect(frame(setup)).not.toContain("Search models")
+  expect(frame(setup)).toContain("Model 00")
+  await setup.mockMouse.click(3, lineY(setup, "Model 02"))
+  await setup.renderOnce()
+  expect(background("Model 02")).toEqual([51, 51, 51])
+  expect(background("Model 00")).not.toEqual([51, 51, 51])
 })
 
 test("double click switches the model", async () => {

@@ -17,5 +17,5 @@
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": false
   },
-  "include": ["tui/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"]
+  "include": ["tui/**/*.tsx", "tui/**/*.ts", "test/**/*.ts", "test/**/*.tsx"]
 }

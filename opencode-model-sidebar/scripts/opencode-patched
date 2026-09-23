@@ -12,14 +12,11 @@
 #      into a cache,
 #   3. execs the cached binary.
 #
-# The pin exists because upstream v2.x is the V2 rewrite; its TUI plugin API is
-# a different contract that this patch does not target yet. Do not auto-follow
-# the stock binary (which may be 2.x) until the patch is ported. To move the
-# pin, edit ./opencode-patched.version next to this script.
+# The patch and build command are selected for the pinned major version.
 #
 # Configuration (environment variables):
 #   OPENCODE_PATCHED_SRC     source checkout (default ~/projects/opencode)
-#   OPENCODE_PATCHED_PATCH   patch file (default <repo>/patches/opencode-model-api.patch)
+#   OPENCODE_PATCHED_PATCH   patch file (selected by pinned major version)
 #   OPENCODE_PATCHED_CACHE   build cache (default $XDG_CACHE_HOME/opencode-patched)
 #   OPENCODE_PATCHED_REAL    override the real opencode binary
 #   OPENCODE_PATCHED_VERSION override the pinned version
@@ -38,7 +35,11 @@ fi
 script_dir=$(CDPATH= cd -- "$(dirname -- "$self_path")" && pwd)
 
 SRC=${OPENCODE_PATCHED_SRC:-$HOME/projects/opencode}
-PATCH=${OPENCODE_PATCHED_PATCH:-$script_dir/../patches/opencode-model-api.patch}
+case ${OPENCODE_PATCHED_VERSION:-$(tr -d '[:space:]' <"$script_dir/opencode-patched.version")} in
+  2.*) default_patch=$script_dir/../patches/opencode-model-api-v2.patch ;;
+  *) default_patch=$script_dir/../patches/opencode-model-api.patch ;;
+esac
+PATCH=${OPENCODE_PATCHED_PATCH:-$default_patch}
 CACHE=${OPENCODE_PATCHED_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/opencode-patched}
 LOG=${OPENCODE_PATCHED_LOG:-$CACHE/build.log}
 
@@ -163,40 +164,65 @@ apply_patch() {
 }
 
 build() {
-  cd "$SRC" || {
+  [ -d "$SRC/.git" ] || [ -f "$SRC/.git" ] || {
     echo "opencode-patched: source checkout '$SRC' not found" >&2
     return 1
   }
 
   echo "=== build $(date -u +%Y-%m-%dT%H:%M:%SZ) version=$version ==="
 
-  if ! git rev-parse "v$version" >/dev/null 2>&1; then
+  if ! git -C "$SRC" rev-parse "v$version" >/dev/null 2>&1; then
     echo "--- fetching v$version ---"
-    git fetch --depth=1 origin "refs/tags/v$version:refs/tags/v$version" || return 1
+    git -C "$SRC" fetch --depth=1 origin "refs/tags/v$version:refs/tags/v$version" || return 1
   fi
 
-  echo "--- checkout v$version ---"
-  git checkout --force --detach "v$version" || return 1
-  git checkout --force -- . || return 1
+  checkout=$CACHE/source/$version
+  if [ ! -d "$checkout" ]; then
+    mkdir -p "$CACHE/source"
+    git -C "$SRC" worktree add --detach "$checkout" "v$version" || return 1
+  fi
+  cd "$checkout" || return 1
+  [ "$(git rev-parse HEAD)" = "$(git -C "$SRC" rev-parse "v$version")" ] || {
+    echo "opencode-patched: cached source is not v$version; refusing to modify it" >&2
+    return 1
+  }
+  # Undo only this patch from a previous build. Never reset the user's source
+  # checkout or unrelated changes in the cached worktree.
+  if git apply -R --check "$PATCH" 2>/dev/null; then
+    git apply -R "$PATCH" || return 1
+  elif [ -n "$(git status --porcelain)" ]; then
+    echo "opencode-patched: cached source has unrelated changes; refusing to overwrite them" >&2
+    return 1
+  fi
 
   echo "--- applying patch ---"
   apply_patch || return 1
 
   echo "--- bun install ---"
-  bun install || return 1
+  bun install --frozen-lockfile || return 1
 
   echo "--- build ---"
   # OPENCODE_VERSION makes the binary report the release version instead of
   # the detached-HEAD 0.0.0--<timestamp> preview string.
-  OPENCODE_VERSION="$version" bun run --cwd packages/opencode build --single --skip-embed-web-ui || return 1
-
-  os=$(uname -s | tr '[:upper:]' '[:lower:]')
-  case $(uname -m) in
-    x86_64) arch=x64 ;;
-    aarch64 | arm64) arch=arm64 ;;
-    *) arch=$(uname -m) ;;
-  esac
-  built=$SRC/packages/opencode/dist/opencode-$os-$arch/bin/opencode
+  if [ "${version%%.*}" = 2 ]; then
+    OPENCODE_VERSION="$version" bun run --cwd packages/cli build --single --skip-web-ui --skip-install || return 1
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case $(uname -m) in
+      x86_64) arch=x64 ;;
+      aarch64 | arm64) arch=arm64 ;;
+      *) arch=$(uname -m) ;;
+    esac
+    built=$checkout/packages/cli/dist/cli-$os-$arch/bin/opencode
+  else
+    OPENCODE_VERSION="$version" bun run --cwd packages/opencode build --single --skip-embed-web-ui || return 1
+    os=$(uname -s | tr '[:upper:]' '[:lower:]')
+    case $(uname -m) in
+      x86_64) arch=x64 ;;
+      aarch64 | arm64) arch=arm64 ;;
+      *) arch=$(uname -m) ;;
+    esac
+    built=$checkout/packages/opencode/dist/opencode-$os-$arch/bin/opencode
+  fi
 
   echo "--- install to cache ---"
   [ -x "$built" ] || {

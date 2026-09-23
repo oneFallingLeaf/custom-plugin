@@ -226,6 +226,10 @@ function View(props: {
   }
 
   function enterSearch() {
+    if (query()) {
+      setQuery("")
+      moveCursor(0)
+    }
     const focused = props.api.renderer.currentFocusedEditor as Editor | null
     if (focused) {
       editor = focused
@@ -469,6 +473,10 @@ function View(props: {
         </box>
         <box
           flexDirection="row"
+          width="100%"
+          minWidth={0}
+          paddingLeft={1}
+          backgroundColor={theme().backgroundElement}
           onMouseOver={() => setPointer("text")}
           onMouseOut={() => setPointer("default")}
           onMouseDown={() => enterSearch()}
@@ -477,7 +485,7 @@ function View(props: {
           <Show when={filtering() && !query()}>
             <text fg={theme().accent}>█</text>
           </Show>
-          <Show when={query()} fallback={<text fg={theme().textMuted}>Search models…</text>}>
+          <Show when={query()} fallback={<Show when={!filtering()}><text fg={theme().textMuted}>Search models…</text></Show>}>
             <text fg={theme().text}>{query()}</text>
           </Show>
           <Show when={filtering() && query()}>
@@ -502,6 +510,7 @@ function View(props: {
               <box
                 flexDirection="row"
                 gap={1}
+                backgroundColor={active() ? theme().backgroundElement : undefined}
                 onMouseOver={() => setPointer("pointer")}
                 onMouseOut={() => setPointer("default")}
                 onMouseDown={() => moveCursor(row())}
