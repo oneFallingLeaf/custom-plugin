@@ -1,5 +1,9 @@
 # Token Usage Plugin — Verification Report
 
+> Historical V1 verification only. This report predates the V2 migration and its
+> counts, dependencies, and changed-file statements do not describe the current
+> tree. Current V2 checks/results are in the migration handoff, not this report.
+
 Verification of the working-tree `tui/token-usage.tsx` implementation against
 `TDD.md`. This pass preserved the existing implementation and test edits, fixed
 test/harness defects only, and did not weaken any expected behavior.

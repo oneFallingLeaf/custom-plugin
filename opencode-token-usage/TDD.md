@@ -1,5 +1,12 @@
 # Token Usage Plugin — Technical Design Document
 
+> Historical V1 design (before the OpenCode V2 CLI migration). The V1 implementation
+> is restored as `tui/token-usage-v1.tsx`, alongside V2's `tui/token-usage-v2.tsx`.
+> `tui/index.ts` exposes the lazy `tui/token-usage.tsx` dispatcher to V2's directory
+> loader. V1 `order` and
+> prompt-model fallback apply only in V1; V2 uses `data.session` caches and
+> `sidebar.content`. The counts and handoff below remain historical.
+
 ## 1. Status and handoff
 
 - Scope: a focused improvement pass on `tui/token-usage.tsx`.

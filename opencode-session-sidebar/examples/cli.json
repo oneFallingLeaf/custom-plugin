@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": [
+    {
+      "package": "/absolute/path/to/custom-plugin/opencode-session-sidebar",
+      "options": {
+        "closeKey": "right",
+        "requireEmptyPrompt": true,
+        "scope": "project",
+        "limit": 50,
+        "showStatus": true
+      }
+    }
+  ]
+}

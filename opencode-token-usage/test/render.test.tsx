@@ -1,14 +1,15 @@
 /** @jsxImportSource @opentui/solid */
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import type { AssistantMessage, Message } from "@opencode-ai/sdk/v2"
+import type { Context } from "@opencode/plugin/tui/context"
+import type { SessionMessageAssistant, SessionMessageInfo } from "@opencode/client"
 import { createTestRenderer, type TestRendererSetup } from "@opentui/core/testing"
 import { render } from "@opentui/solid"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createSignal } from "solid-js"
-import plugin, { type Options } from "../tui/token-usage"
+import plugin, { type Options } from "../tui/token-usage-v2"
+import hybrid from "../tui/token-usage"
 
 const SESSION = "ses_test"
 const originalFetch = globalThis.fetch
@@ -65,9 +66,9 @@ type Usage = {
   cost?: number
 }
 
-function assistant(usage: Usage): Message {
+function assistant(usage: Usage): SessionMessageInfo {
   return {
-    role: "assistant",
+    type: "assistant",
     cost: usage.cost ?? 0,
     tokens: {
       input: usage.input ?? 0,
@@ -75,10 +76,10 @@ function assistant(usage: Usage): Message {
       reasoning: usage.reasoning ?? 0,
       cache: { read: usage.cacheRead ?? 0, write: usage.cacheWrite ?? 0 },
     },
-  } as unknown as AssistantMessage
+  } as SessionMessageAssistant
 }
 
-type Slot = (ctx: unknown, props: { session_id: string }) => unknown
+type Slot = (props: { sessionID: string }) => unknown
 
 type CapturedRequest = { url: string; init: RequestInit | undefined }
 
@@ -89,23 +90,33 @@ type Harness = {
   setup: TestRendererSetup
   requests: CapturedRequest[]
   fetchCalls: string[]
+  integrationCalls: string[]
+  rpcCalls: number
   registered: boolean
+  slotActive: () => boolean
+  unload: () => void
   setProvider: (provider: string | undefined) => void
+  setMessages: (messages: SessionMessageInfo[]) => void
   dispose: () => void
 }
 
 type MountOptions = {
-  messages?: Message[]
+  messages?: SessionMessageInfo[]
   provider?: string
-  promptModel?: { providerID: string; modelID: string }
+  selectedModel?: { providerID: string; id: string }
   auth?: Record<string, unknown>
   authRaw?: string
   codexAuth?: Record<string, unknown> | string
   openCodeApiKey?: string
   options?: Options
   fetch?: FetchHandler
+  v2Connections?: Record<string, Array<{ type: "credential"; id: string; label: string; method: "oauth" | "key" }>>
+  integrationError?: boolean
+  rpcQuota?: { windows: Array<{ percent: number; resetsAt: number; label: string }> }
+  rpcError?: boolean
   width?: number
   height?: number
+  hybrid?: boolean
 }
 
 async function mount(h: MountOptions = {}): Promise<Harness> {
@@ -161,6 +172,8 @@ async function mount(h: MountOptions = {}): Promise<Harness> {
   // Keep a live URL list that stays current for callers that destructure it
   // before the first request is issued.
   const fetchCalls: string[] = []
+  const integrationCalls: string[] = []
+  let rpcCalls = 0
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     requests.push({ url, init })
@@ -171,50 +184,78 @@ async function mount(h: MountOptions = {}): Promise<Harness> {
   }) as typeof fetch
 
   const [provider, setProvider] = createSignal<string | undefined>(h.provider)
+  const [messages, setMessages] = createSignal(h.messages ?? [])
   let slot: Slot | undefined
+  let unregister = () => {}
   const api = {
-    theme: {
-      current: {
-        text: "#ffffff",
-        textMuted: "#808080",
-        success: "#00ff00",
-        warning: "#ffcc00",
-        error: "#ff0000",
-      },
-    },
-    model: { current: () => h.promptModel },
-    state: {
-      session: {
-        messages: () => h.messages ?? [],
-        get: () => {
-          const value = provider()
-          return value ? { model: { providerID: value, modelID: "test-model" } } : undefined
+    app: { version: "2.0.15" },
+    client: {
+      rpc: () => ({ openai: async () => {
+        rpcCalls++
+        if (h.rpcError || !h.rpcQuota) throw new Error("quota RPC unavailable")
+        return h.rpcQuota
+      } }),
+      integration: {
+        get: async ({ integrationID }: { integrationID: string }) => {
+          integrationCalls.push(integrationID)
+          if (h.integrationError) throw new Error("integration unavailable")
+          return { data: { connections: h.v2Connections?.[integrationID] ?? [] } }
         },
       },
-      path: { state: join(dataHome, "state") },
     },
-    renderer: setup.renderer,
-    slots: {
-      register: (config: { slots: { sidebar_content: Slot } }) => {
-        slot = config.slots.sidebar_content
+    theme: {
+      text: {
+        base: "#ffffff",
+        muted: "#808080",
+        feedback: {
+          success: { base: "#00ff00" },
+          warning: { base: "#ffcc00" },
+          error: { base: "#ff0000" },
+        },
       },
     },
-    lifecycle: { onDispose: () => {} },
+    options: h.options ?? {},
+    data: {
+      session: {
+        message: { list: () => h.selectedModel
+          ? [{ type: "model-switched", model: h.selectedModel }, ...messages()]
+          : messages() },
+        get: () => {
+          const value = provider()
+          return value ? { model: { providerID: value, id: "test-model" } } : undefined
+        },
+      },
+    },
+    renderer: setup.renderer,
+    ui: {
+      slot: (config: { append: string; render: Slot }) => {
+        if (config.append !== "sidebar.content") throw new Error("wrong slot")
+        slot = config.render
+        unregister = () => { slot = undefined }
+        return unregister
+      },
+    },
   }
 
-  await plugin.tui(api as unknown as TuiPluginApi, h.options as never, {} as never)
+  const cleanup = await (h.hybrid ? hybrid : plugin).setup(api as unknown as Context)
+  cleanups.push(() => { if (typeof cleanup === "function") cleanup() })
   const registered = slot !== undefined
   if (slot) {
     const registeredSlot = slot
-    await render(() => registeredSlot({}, { session_id: SESSION }) as never, setup.renderer)
+    await render(() => registeredSlot({ sessionID: SESSION }) as never, setup.renderer)
     await setup.renderOnce()
   }
   return {
     setup,
     requests,
     fetchCalls,
+    integrationCalls,
+    get rpcCalls() { return rpcCalls },
     registered,
+    slotActive: () => slot !== undefined,
+    unload: () => { if (typeof cleanup === "function") cleanup() },
     setProvider: (value) => setProvider(value),
+    setMessages: (value: SessionMessageInfo[]) => setMessages(value),
     dispose: () => {
       if (!setup.renderer.isDestroyed) setup.renderer.destroy()
     },
@@ -301,9 +342,100 @@ function authHeaders(request: CapturedRequest): Record<string, string> {
   return request.init?.headers as Record<string, string>
 }
 
-test("registers a sidebar_content slot", async () => {
-  const { registered } = await mount()
+test("V2-only OpenAI sign-in shows unavailable without requesting a legacy quota", async () => {
+  const h = await mount({
+    provider: "openai",
+    messages: [assistant({ input: 42 })],
+    v2Connections: { openai: [{ type: "credential", id: "synthetic-id", label: "synthetic-account", method: "oauth" }] },
+  })
+  const screen = await waitForFrameText(h.setup, "Quota unavailable for V2 sign-in")
+  expect(screen).toContain("In 42 · Out 0")
+  expect(screen).not.toContain("synthetic-account")
+  expect(screen).not.toContain("synthetic-id")
+  expect(h.integrationCalls).toEqual(["openai"])
+  expect(h.requests).toHaveLength(0)
+})
+
+test("active OpenAI V2 connection displays server quota without sending a local token", async () => {
+  const h = await mount({
+    provider: "openai",
+    codexAuth: { auth_mode: "chatgpt", tokens: { access_token: "stale-legacy-token" } },
+    v2Connections: { openai: [{ type: "credential", id: "v2", label: "new account", method: "oauth" }] },
+    rpcQuota: { windows: [{ percent: 48, resetsAt: Date.now() + 3_600_000, label: "5h" }] },
+  })
+  const screen = await waitForFrameText(h.setup, "OpenAI · active account")
+  expect(screen).toContain("48%")
+  expect(screen).not.toContain("Account may differ")
+  expect(h.rpcCalls).toBe(1)
+  expect(h.requests).toHaveLength(0)
+})
+
+test("hybrid V2 setup renders cached totals and refuses a connected account's legacy token", async () => {
+  const h = await mount({
+    hybrid: true,
+    provider: "openai",
+    messages: [assistant({ input: 1200, output: 200 })],
+    codexAuth: { auth_mode: "chatgpt", tokens: { access_token: "synthetic-legacy-token" } },
+    v2Connections: { openai: [{ type: "credential", id: "v2", label: "new account", method: "oauth" }] },
+  })
+  const screen = await waitForFrameText(h.setup, "Quota unavailable for V2 sign-in")
+  expect(screen).toContain("In 1.2K · Out 200")
+  expect(screen).toContain("1 reqs")
+  expect(h.integrationCalls).toEqual(["openai"])
+  expect(h.requests).toEqual([])
+})
+
+test("V2 Go connection blocks a stale legacy key and never sends it", async () => {
+  const h = await mount({
+    provider: "opencode-go",
+    auth: { "opencode-go": { key: "stale-legacy-secret" } },
+    v2Connections: { "opencode-go": [{ type: "credential", id: "other", label: "synthetic-new-account", method: "key" }] },
+  })
+  const screen = await waitForFrameText(h.setup, "Quota unavailable for V2 sign-in")
+  expect(screen).not.toContain("stale-legacy-secret")
+  expect(screen).not.toContain("synthetic-new-account")
+  expect(h.requests).toHaveLength(0)
+  expect(h.integrationCalls).toEqual(["opencode-go"])
+})
+
+test("legacy quota labels its source and warns that the V2 account may differ", async () => {
+  const h = await mount({
+    provider: "openai",
+    codexAuth: { auth_mode: "chatgpt", tokens: { access_token: "legacy-secret" } },
+    fetch: () => openaiQuota(),
+  })
+  const screen = await waitForFrameText(h.setup, "Account may differ from V2")
+  expect(screen).toContain("OpenAI · legacy quota")
+  expect(screen).toContain("48%")
+  expect(screen).not.toContain("legacy-secret")
+  expect(h.requests).toHaveLength(1)
+})
+
+test("failure to inspect V2 connections fails closed without using legacy credentials", async () => {
+  const h = await mount({
+    provider: "openai",
+    integrationError: true,
+    codexAuth: { auth_mode: "chatgpt", tokens: { access_token: "legacy-secret" } },
+  })
+  expect(await waitForFrameText(h.setup, "Quota unavailable for V2 sign-in")).not.toContain("legacy-secret")
+  expect(h.requests).toHaveLength(0)
+})
+
+test("registers a V2 sidebar.content slot and unregisters on unload", async () => {
+  const { registered, slotActive, unload } = await mount()
   expect(registered).toBe(true)
+  expect(slotActive()).toBe(true)
+  unload()
+  expect(slotActive()).toBe(false)
+})
+
+test("cached V2 assistant messages update session totals without remounting", async () => {
+  const h = await mount({ messages: [assistant({ input: 100, output: 20 })] })
+  expect(frame(h.setup)).toContain("In 100 · Out 20")
+  h.setMessages([assistant({ input: 100, output: 20 }), assistant({ input: 50, output: 30 })])
+  await h.setup.renderOnce()
+  expect(frame(h.setup)).toContain("2 reqs")
+  expect(frame(h.setup)).toContain("In 150 · Out 50")
 })
 
 test("renders the Usage header even with no messages", async () => {
@@ -417,11 +549,11 @@ test("shows OpenCode Go quota for opencode-go sessions", async () => {
   expect(screen).toContain("40%")
 })
 
-test("uses the session model when the prompt model is a different provider", async () => {
+test("uses the session model when a model-switched message names a different provider", async () => {
   const now = Date.now()
   const { setup, fetchCalls } = await mount({
     provider: "opencode-go",
-    promptModel: { providerID: "openai", modelID: "gpt-5" },
+    selectedModel: { providerID: "openai", id: "gpt-5" },
     auth: { "opencode-go": { key: "sk-test" } },
     fetch: () => ({
       usage: {
@@ -505,10 +637,10 @@ test("enabled: false does not register the sidebar slot", async () => {
 // Q1: provider selection precedence
 // ---------------------------------------------------------------------------
 
-test("a supported session provider takes precedence over a different prompt provider", async () => {
+test("a supported session provider takes precedence over a different model-switched provider", async () => {
   const h = await mount({
     provider: "openai",
-    promptModel: { providerID: "opencode-go", modelID: "go-model" },
+    selectedModel: { providerID: "opencode-go", id: "go-model" },
     codexAuth: { auth_mode: "chatgpt", tokens: { access_token: "codex-token" } },
     fetch: () => openaiQuota(),
   })
@@ -520,10 +652,10 @@ test("a supported session provider takes precedence over a different prompt prov
   expect(screen).not.toContain("OpenCode Go")
 })
 
-test("an unsupported session provider never inherits a supported prompt provider's quota", async () => {
+test("an unsupported session provider never inherits a supported model-switched provider's quota", async () => {
   const h = await mount({
     provider: "anthropic",
-    promptModel: { providerID: "openai", modelID: "gpt-5" },
+    selectedModel: { providerID: "openai", id: "gpt-5" },
     messages: [assistant({ input: 50 })],
     codexAuth: { auth_mode: "chatgpt", tokens: { access_token: "codex-token" } },
     // no fetch handler: any quota request fails the assertion below
@@ -536,9 +668,9 @@ test("an unsupported session provider never inherits a supported prompt provider
   expect(h.requests).toHaveLength(0)
 })
 
-test("a missing session provider falls back to the prompt provider", async () => {
+test("a missing session provider falls back to its model-switched message", async () => {
   const h = await mount({
-    promptModel: { providerID: "openai", modelID: "gpt-5" },
+    selectedModel: { providerID: "openai", id: "gpt-5" },
     codexAuth: { auth_mode: "chatgpt", tokens: { access_token: "codex-token" } },
     fetch: () => openaiQuota(),
   })
@@ -678,7 +810,7 @@ test("failed quota polling schedules the next poll at 360 seconds", async () => 
 test("showQuota false preserves token details and makes no quota request", async () => {
   const h = await mount({
     provider: "openai",
-    messages: [assistant({ input: 100 })] as Message[],
+    messages: [assistant({ input: 100 })],
     auth: { openai: { type: "oauth", access: "xdg-token", expires: Date.now() + 3_600_000 } },
     codexAuth: { auth_mode: "chatgpt", tokens: { access_token: "codex-token" } },
     options: { showQuota: false },

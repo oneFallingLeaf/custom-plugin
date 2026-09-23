@@ -1,149 +1,87 @@
-# opencode-session-sidebar
+# opencode-session-sidebar 0.2.0
 
-An [OpenCode](https://opencode.ai) TUI plugin for switching sessions from a
-collapsible panel at the left edge of the screen.
+A sessions plugin for both OpenCode V1 and [OpenCode V2](https://opencode.ai/v2/docs/build/plugins/cli). The package root and `./tui` resolve to the same hybrid entry: it checks the host's app version and loads only the matching implementation. The root export makes the package discoverable by the CLI; it is not a server plugin. `./v1` and `./v2` are also available as explicit exports; do not load a version-specific entry in the other host.
 
-Press `←` when the prompt is empty, click the **Sessions** button beside the
-prompt, or run `/sessions-panel` to toggle the panel. Use `↑`/`↓` to select a
-session and `Enter` to switch; `→`, `Escape`, or the `×` button closes it. Click
-a session to switch directly. The current session is marked `current`, and
-active sessions are grouped under **Running** with `running` or `retrying`
-status. The list updates when sessions change and when status events arrive.
+## OpenCode V1
 
-The panel is non-modal. OpenCode's TUI plugin API does not provide a left-hand
-layout slot that reserves space, so the panel overlays the left edge of the
-screen while open. Closing it reveals the content underneath.
+V1 uses a non-modal overlay over the left edge, from Home or a session. Press `left` with an empty prompt, click **Sessions** next to the prompt, or use `/sessions-panel`; `up`/`down` and `enter` navigate, `right` or `escape` closes. Clicking into the prompt closes the overlay without discarding a draft. The V1 default `openKey` remains `left` (it overrides the previous-child shortcut while the prompt is empty).
+
+Run `bun install` in this checkout and add the package to V1's global `~/.config/opencode/tui.json` (or `$XDG_CONFIG_HOME/opencode/tui.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": [["/absolute/path/to/custom-plugin/opencode-session-sidebar", {
+    "openKey": "left", "closeKey": "right", "scope": "project", "limit": 50
+  }]]
+}
+```
+
+See [`examples/tui.json`](examples/tui.json). An npm installation can instead use `"opencode-session-sidebar@0.2.0"` in the V1 `plugin` list. The V1 package loader uses the `./tui` export, not the V2 CLI config. For a manually installed local package, point V1 at the absolute path of `tui/index.ts` in that installed package; keep its dependencies installed. Do not copy only that file: it dynamically loads `v1.tsx` from the same directory.
+
+## OpenCode V2
+
+From a session, click **Sessions** in the prompt footer, use `/sessions-panel`, or select **Toggle sessions panel** from the command palette. There is no default keyboard shortcut to open the panel: V2 uses `left` for `session.child.previous`. V2 presents the list as a left-edge overlay, including when opened with the configured hotkey; it covers the left edge of the session while open. Use `up`/`down` and `enter` to switch, or click a session. `right`, `escape`, and the `×` control close the panel. Typing filters fetched titles case-insensitively; `backspace` removes a character and `ctrl+u` clears the search. Subagent sessions are hidden. The current session appears first; active sessions are grouped under **Running**.
+
+The V2 sessions overlay exists only inside a session: the slash/palette command cannot open it from Home. It temporarily blurs the prompt and restores focus on close. Session status is refreshed from the V2 data cache and status events; retrying is shown when a retry status event is observed while the overlay is mounted.
 
 ## Install
 
-### Install with OpenCode
-
-Run the plugin installer with `--global` to use the sidebar in every project:
-
-```sh
-opencode plugin opencode-session-sidebar --global
-```
-
-OpenCode installs the package from npm and adds it to your global
-`~/.config/opencode/tui.json` automatically. Restart OpenCode to load it. The
-command is `opencode plugin <package>`; there is no `plugin add` subcommand.
-
-### Install from npm
-
-Install the published package into your global OpenCode config directory:
-
-```sh
-npm install --prefix ~/.config/opencode opencode-session-sidebar
-```
-
-Register the installed file in `~/.config/opencode/tui.json`:
+From this checkout, run `bun install` in this package directory, then add the
+package directory to your **global** `~/.config/opencode/cli.json` (or
+`$XDG_CONFIG_HOME/opencode/cli.json`). Replace the path with the absolute path
+to your checkout:
 
 ```json
 {
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    ["./node_modules/opencode-session-sidebar/tui/sessions.tsx", { "openKey": "left", "closeKey": "right" }]
-  ]
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": ["/absolute/path/to/custom-plugin/opencode-session-sidebar"]
 }
 ```
 
-Restart OpenCode. TUI plugins must be registered in `tui.json`, not
-`opencode.json`; installing the npm package alone does not enable the plugin.
+OpenCode loads the package's `./tui` export automatically. This configuration is local to the CLI and works when connected to a remote OpenCode server. Use `cli.json` for V2 and `tui.json` for V1; do not put this CLI-only plugin in server `opencode.json`. There is no project-local V2 `cli.json`. Restart the CLI after installation. See [CLI plugin installation](https://opencode.ai/v2/docs/cli/plugins).
 
-### Install from a local checkout
+Version `0.2.0` is published to npm. Replace the checkout path with
+`"opencode-session-sidebar@0.2.0"`. Alternatively, install it manually with
+`npm install --prefix ~/.config/opencode opencode-session-sidebar@0.2.0` (use
+`$XDG_CONFIG_HOME/opencode` as the prefix if set) and use
+`./node_modules/opencode-session-sidebar` as the package entry. Do not point
+the CLI at the individual `.tsx` file; the package exposes `./tui`.
 
-From this repository's `opencode-session-sidebar` directory, copy the plugin
-into your global TUI plugin directory:
+## V2 configuration
 
-```sh
-mkdir -p ~/.config/opencode/plugins/tui
-cp tui/sessions.tsx ~/.config/opencode/plugins/tui/
-```
-
-```json
-{
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    ["./plugins/tui/sessions.tsx", { "openKey": "left", "closeKey": "right" }]
-  ]
-}
-```
-
-Restart OpenCode. You can also register this repository's `tui/sessions.tsx` by
-absolute path.
-
-## Controls
-
-| Action | Key / control |
-| --- | --- |
-| Toggle the panel | **Sessions** button beside the prompt or `/sessions-panel` |
-| Open from an empty prompt | `left` (configurable) |
-| Search session titles | Type while the panel is open |
-| Edit / clear search | `backspace` / `ctrl+u` |
-| Move selection | `up` / `down` |
-| Switch session | `enter` or click a session |
-| Close and return to the prompt | `right` (configurable), `escape`, or `×` |
-
-When the prompt contains text, `left` still moves the cursor unless
-`requireEmptyPrompt` is set to `false`. The button and command work both at
-startup and inside a session.
-
-Search is case-insensitive and filters the fetched session titles within your
-configured `scope` and `limit` (50 by default). It is not a search of message
-contents or sessions beyond that limit. Running/current markers remain visible
-on matching sessions. Arrow keys navigate only matches; Enter does nothing when
-there are no matches. Closing and reopening the panel resets the query.
-
-Clicking back into the prompt closes the panel without changing your draft.
-
-## Configuration
-
-Options go in the second element of the `tui.json` plugin entry. For an npm
-installation, use the installed file path:
+Pass options with the V2 object form (also in [`examples/cli.json`](examples/cli.json)):
 
 ```json
 {
-  "$schema": "https://opencode.ai/tui.json",
-  "plugin": [
-    ["./node_modules/opencode-session-sidebar/tui/sessions.tsx", {
-      "openKey": "left",
+  "$schema": "https://opencode.ai/v2/cli.json",
+  "plugins": [{
+    "package": "/absolute/path/to/custom-plugin/opencode-session-sidebar",
+    "options": {
       "closeKey": "right",
       "requireEmptyPrompt": true,
       "scope": "project",
       "limit": 50,
       "showStatus": true
-    }]
-  ]
+    }
+  }]
 }
 ```
 
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `openKey` | `string` | `left` | Key to open the panel when closed. |
-| `closeKey` | `string` | `right` | Key to close the panel (`escape` also works). |
-| `requireEmptyPrompt` | `boolean` | `true` | Only use `openKey` when the prompt is empty. |
-| `scope` | `"project"` or `"all"` | `"project"` | List sessions from this project or all projects. |
-| `limit` | `number` | `50` | Maximum number of sessions fetched. |
-| `showStatus` | `boolean` | `true` | Group and mark running or retrying sessions. |
-| `enabled` | `boolean` | `true` | Disable the plugin without removing its entry. |
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `openKey` | unset in V2; `left` in V1 | Optional global key to open from a session in V2; leave unset to preserve V2 shortcuts. |
+| `closeKey` | `right` | Key to close (also `escape`). |
+| `requireEmptyPrompt` | `true` | If `openKey` is set, do not intercept it while editing a draft. |
+| `scope` | `project` | `project` lists sessions in the current session's project; `all` lists across projects. |
+| `limit` | `50` | Maximum number of sessions fetched; positive fractions round down to at least one. |
+| `showStatus` | `true` | Mark running/retrying sessions and group them before older sessions. |
+| `enabled` | `true` | Disable this plugin without removing its configuration. |
 
-The list shows top-level sessions only; subagent sessions are hidden. Active
-status depends on OpenCode exposing live status through
-`api.state.session.status`.
+Search only filters the fetched session titles, not message contents or sessions beyond `limit`. If the project identity is not yet available in the local session cache, the project view may be empty until reopening the panel.
 
-The `all` scope uses the host's global experimental session-list endpoint.
-Positive fractional limits are rounded down, with a minimum of one.
-
-While the prompt is empty, `left` opens this panel instead of OpenCode's
-previous-child-session shortcut. Change `openKey` if you use that shortcut.
-
-Requires an OpenCode build with the keymap-backed TUI plugin API and app and
-prompt-right slots (`@opencode-ai/plugin` >= 1.18.0).
+To opt into the former arrow shortcut, add `"openKey": "left"` to this plugin's `options`. This registers a global keymap layer while in a session with the overlay closed; with the default `requireEmptyPrompt: true`, it is active only when the prompt is empty. **Tradeoff:** it may override V2's `session.child.previous` on `left` in that context. Choose another key after checking your [V2 keybindings](https://opencode.ai/v2/docs/cli/keybinds), or leave `openKey` unset to retain built-in navigation. Setting `openKey` to an empty string also leaves it unbound.
 
 ## Development
 
-From this directory, run `bun install`, `bun test`, and `bun run typecheck`.
-
-## License
-
-GPL-2.0-only. See [LICENSE](LICENSE).
+Run `bun install`, `bun test`, `bun run typecheck`, and `npm pack --dry-run` from this directory. V1 requires the keymap-backed TUI API (`@opencode-ai/plugin` >= 1.18.0) and OpenTUI >= 0.4.5. V2 requires OpenTUI >= 0.5.10. GPL-2.0-only; see [LICENSE](LICENSE).
