@@ -1,6 +1,6 @@
 {
   "name": "opencode-session-sidebar",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenCode V1 and V2 TUI plugin: searchable sessions with live status and switching.",
   "type": "module",
   "license": "GPL-2.0-only",
