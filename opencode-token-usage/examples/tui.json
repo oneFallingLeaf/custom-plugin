@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/tui.json",
   "plugin": [
-    ["./plugins/tui/token-usage.tsx", { "order": 110, "showCost": true }]
+    ["/absolute/path/to/opencode-token-usage/tui/token-usage.tsx", { "order": 110, "showCost": true }]
   ]
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import type { AssistantMessage, Message } from "@opencode-ai/sdk/v2"
+import type { SessionMessageAssistant, SessionMessageInfo } from "@opencode/client"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import {
@@ -14,7 +14,7 @@ import {
   parseWhamWindow,
   resolveOptions,
   summarize,
-} from "../tui/token-usage"
+} from "../tui/token-usage-v2"
 
 type Usage = {
   input?: number
@@ -25,9 +25,9 @@ type Usage = {
   cost?: number
 }
 
-function assistant(usage: Usage): Message {
+function assistant(usage: Usage): SessionMessageInfo {
   return {
-    role: "assistant",
+    type: "assistant",
     cost: usage.cost ?? 0,
     tokens: {
       input: usage.input ?? 0,
@@ -35,11 +35,11 @@ function assistant(usage: Usage): Message {
       reasoning: usage.reasoning ?? 0,
       cache: { read: usage.cacheRead ?? 0, write: usage.cacheWrite ?? 0 },
     },
-  } as unknown as AssistantMessage
+  } as SessionMessageAssistant
 }
 
-function user(): Message {
-  return { role: "user" } as unknown as Message
+function user(): SessionMessageInfo {
+  return { type: "user" } as SessionMessageInfo
 }
 
 function jwt(payload: Record<string, unknown>): string {
@@ -49,7 +49,6 @@ function jwt(payload: Record<string, unknown>): string {
 
 test("resolveOptions applies defaults", () => {
   expect(resolveOptions(undefined)).toEqual({
-    order: 110,
     startCollapsed: false,
     showCost: false,
     showCache: true,
@@ -58,26 +57,21 @@ test("resolveOptions applies defaults", () => {
   })
 })
 
-test("resolveOptions honors overrides and rejects bad values", () => {
+test("resolveOptions honors overrides", () => {
   expect(
     resolveOptions({
-      order: 300,
       startCollapsed: true,
       showCost: true,
       showCache: false,
       showReasoning: false,
     }),
   ).toEqual({
-    order: 300,
     startCollapsed: true,
     showCost: true,
     showCache: false,
     showReasoning: false,
     showQuota: true,
   })
-  expect(resolveOptions({ order: 0 }).order).toBe(110)
-  expect(resolveOptions({ order: -5 }).order).toBe(110)
-  expect(resolveOptions({ order: Number.POSITIVE_INFINITY }).order).toBe(110)
 })
 
 test("summarize returns zeros for no messages", () => {
@@ -278,8 +272,8 @@ test("parseGoUsage clamps percent and skips invalid windows", () => {
   expect(parseGoUsage(null)).toEqual([])
 })
 
-function rawMessage(value: unknown): Message {
-  return value as Message
+function rawMessage(value: unknown): SessionMessageInfo {
+  return value as SessionMessageInfo
 }
 
 // Q4: showQuota defaults to true; only explicit false disables it.
@@ -290,23 +284,13 @@ test("resolveOptions defaults showQuota to true and honors explicit false", () =
   expect(resolveOptions({ showQuota: false }).showQuota).toBe(false)
 })
 
-// U3: slot orders below one fall back to 110; valid orders are floored.
-test("resolveOptions floors valid slot orders and rejects orders below one", () => {
-  expect(resolveOptions({ order: 1 }).order).toBe(1)
-  expect(resolveOptions({ order: 1.9 }).order).toBe(1)
-  expect(resolveOptions({ order: 2.5 }).order).toBe(2)
-  expect(resolveOptions({ order: 300 }).order).toBe(300)
-  expect(resolveOptions({ order: 0.999 }).order).toBe(110)
-  expect(resolveOptions({ order: 0 }).order).toBe(110)
-})
-
 // U1: incomplete assistant messages are still counted as requests.
 test("summarize tolerates incomplete assistant messages and counts them", () => {
   const summary = summarize([
-    rawMessage({ role: "assistant" }),
-    rawMessage({ role: "assistant", tokens: undefined, cost: undefined }),
-    rawMessage({ role: "assistant", tokens: null }),
-    rawMessage({ role: "assistant", tokens: {} }),
+    rawMessage({ type: "assistant" }),
+    rawMessage({ type: "assistant", tokens: undefined, cost: undefined }),
+    rawMessage({ type: "assistant", tokens: null }),
+    rawMessage({ type: "assistant", tokens: {} }),
   ])
   expect(summary).toEqual({
     input: 0,
@@ -323,7 +307,7 @@ test("summarize tolerates incomplete assistant messages and counts them", () => 
 test("summarize ignores invalid fields without discarding valid ones", () => {
   const summary = summarize([
     rawMessage({
-      role: "assistant",
+      type: "assistant",
       cost: 0.5,
       tokens: {
         input: 100,
@@ -349,12 +333,12 @@ test("summarize returns exact finite totals across mixed messages", () => {
   const summary = summarize([
     user(),
     rawMessage({
-      role: "assistant",
+      type: "assistant",
       cost: 1.25,
       tokens: { input: 1000, output: 250, reasoning: 40, cache: { read: 10, write: 5 } },
     }),
     rawMessage({
-      role: "assistant",
+      type: "assistant",
       cost: -3,
       tokens: {
         input: -1,
@@ -363,7 +347,7 @@ test("summarize returns exact finite totals across mixed messages", () => {
         cache: { read: null, write: "x" },
       },
     }),
-    rawMessage({ role: "assistant" }),
+    rawMessage({ type: "assistant" }),
   ])
   expect(summary).toEqual({
     input: 1000,
