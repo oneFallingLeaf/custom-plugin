@@ -1,544 +1,293 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { createOpencodeClient } from "@opencode-ai/sdk/v2"
+import { PluginContextProvider } from "@opencode/plugin/tui"
+import type { Context, KeymapLayer, SlotPath } from "@opencode/plugin/tui/context"
+import type { SessionInfo } from "@opencode/client"
 import { createTestRenderer } from "@opentui/core/testing"
 import { render } from "@opentui/solid"
 import { createSignal } from "solid-js"
-import plugin from "../tui/sessions"
+import plugin from "../tui/v2"
 
-type Layer = {
-  enabled?: () => boolean
-  bindings?: Array<{ key: string; cmd: string }>
-  commands?: Array<{ name: string; run: () => void }>
+function session(id: string, updated: number, projectID = "project", parentID?: string): SessionInfo {
+  return { id, projectID, parentID, title: `Session ${id}`, time: { created: updated, updated }, location: { directory: "/project" }, cost: 0, tokens: {} } as SessionInfo
 }
-
-function session(id: string, updated: number) {
-  return { id, title: `Session ${id}`, time: { updated } }
-}
-
-type ListResponse = { data?: ReturnType<typeof session>[]; error?: unknown }
-
-function deferred<Value>() {
-  let resolve!: (value: Value) => void
-  const promise = new Promise<Value>((done) => { resolve = done })
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
   return { promise, resolve }
 }
-
-async function harness(size = { width: 80, height: 24 }, options?: { scope?: "project" | "all"; limit?: number }, client?: TuiPluginApi["client"]) {
-  const setup = await createTestRenderer({ ...size, useThread: false })
-  const layers: Layer[] = []
-  const slots: Record<string, () => unknown> = {}
-  const listeners = new Map<string, Set<() => void>>()
+async function harness(settings: Record<string, unknown> = {}, size = { width: 80, height: 24 }) {
+  const screen = await createTestRenderer({ ...size, useThread: false })
+  const slots = new Map<SlotPath, (input: any) => any>()
+  const layers: Array<() => KeymapLayer> = []
+  const listeners = new Map<string, Set<(event: any) => void>>()
+  const requests: unknown[] = []
+  const replies: Array<Promise<{ data: SessionInfo[] }>> = []
   const navigations: string[] = []
-  const statuses = new Map<string, string>()
   const toasts: string[] = []
-  const replies: Array<Promise<ListResponse>> = []
-  const calls: Array<{ endpoint: "project" | "global"; query: { directory?: string; roots: boolean; limit: number; scope?: "project" } }> = []
+  const [route, setRoute] = createSignal<{ type: "session"; sessionID: string } | { type: "home" }>({ type: "session", sessionID: "active" })
   let list = [session("old", 1), session("active", 2)]
-  let route = "active"
-  const [routeName, setRouteName] = createSignal("session")
-  let disposed: (() => void) | undefined
-  let requests = 0
-  let cachedCurrent: ReturnType<typeof session> | undefined
-  const dialog = { open: false }
-  const editor = { plainText: "", focused: true, blur() { this.focused = false }, focus() { this.focused = true } }
-  const api = {
-    renderer: setup.renderer,
-    theme: { current: { backgroundPanel: "#111111", backgroundElement: "#333333", border: "#aaaaaa", accent: "#00aaff", text: "#ffffff", textMuted: "#888888", success: "#00ff00" } },
-    route: {
-      get current() { return { name: routeName(), params: { sessionID: route } } },
-      navigate(_name: string, params: { sessionID: string }) { route = params.sessionID; navigations.push(route) },
-    },
-    ui: { dialog, toast: (value: { message: string }) => { toasts.push(value.message) } },
-    state: { session: { get: (id: string) => list.find((item) => item.id === id) ?? (cachedCurrent?.id === id ? cachedCurrent : undefined), status: (id: string) => ({ type: statuses.get(id) ?? "idle" }) } },
-    client: client ?? {
-      session: { list(query: { roots: boolean; limit: number; scope?: "project" }) {
-        calls.push({ endpoint: "project", query }); requests++; return replies.shift() ?? Promise.resolve({ data: list })
+  let editorFocused = true
+  let stops: (() => void) | void
+  const editor = { plainText: "", blur: () => { editorFocused = false }, focus: () => { editorFocused = true } }
+  Object.defineProperty(screen.renderer, "currentFocusedEditor", { configurable: true, get: () => editorFocused ? editor : null })
+  const ctx = {
+    options: settings,
+    renderer: screen.renderer,
+    theme: { background: { raised: { base: "#111111", high: "#333333" } }, border: { base: "#aaaaaa" }, text: { base: "#ffffff", muted: "#888888", action: { primary: { base: "#00aaff" } }, feedback: { success: { base: "#00ff00" } } } },
+    client: { session: { list(input: unknown) { requests.push(input); return replies.shift() ?? Promise.resolve({ data: list }) } } },
+    data: { session: { get: (id: string) => id === "active" ? session("active", 2) : list.find((s) => s.id === id), status: () => "idle" },
+      on(name: string, callback: (event: any) => void) {
+        const group = listeners.get(name) ?? new Set()
+        group.add(callback); listeners.set(name, group)
+        return () => group.delete(callback)
       } },
-      experimental: { session: { list(query: { directory?: string; roots: boolean; limit: number }) {
-        calls.push({ endpoint: "global", query }); requests++; return replies.shift() ?? Promise.resolve({ data: list })
-      } } },
+    ui: {
+      slot(claim: { append: SlotPath; render: (input: any) => any }) { slots.set(claim.append, claim.render); return () => slots.delete(claim.append) },
+      router: { current: route, navigate: (target: { sessionID: string }) => navigations.push(target.sessionID) },
+      toast: { show: (toast: { message: string }) => toasts.push(toast.message) },
     },
-    keymap: { registerLayer(layer: Layer) { layers.push(layer) } },
-    slots: { register(config: { slots: typeof slots }) { Object.assign(slots, config.slots) } },
-    event: { on(name: string, callback: () => void) {
-      const callbacks = listeners.get(name) ?? new Set()
-      callbacks.add(callback)
-      listeners.set(name, callbacks)
-      return () => callbacks.delete(callback)
-    } },
-    lifecycle: { onDispose(fn: () => void) { disposed = fn } },
+    keymap: { layer(input: () => KeymapLayer) { layers.push(input) } },
+  } as unknown as Context
+  stops = await plugin.setup(ctx)
+  async function mount() {
+    await render(() => <PluginContextProvider value={ctx}>
+      <box width={size.width} height={size.height}>
+        {slots.get("app")?.({})}
+      </box>
+    </PluginContextProvider>, screen.renderer)
+    await screen.renderOnce()
   }
-  await plugin.tui(api as unknown as TuiPluginApi, options, {} as never)
-  const run = (name: string) => {
-    const command = layers.flatMap((layer) => layer.commands ?? []).find((item) => item.name === `session.panel.${name}`)
-    if (!command) throw new Error(`Missing command: ${name}`)
-    command.run()
+  function run(id: string) {
+    const found = layers.flatMap((layer) => layer().commands ?? []).find((cmd) => cmd.id === `session-sidebar.sessions.${id}`)
+    if (!found) throw new Error(`Missing command ${id}`)
+    void found.run()
   }
   return {
-    setup, slots, layers, editor, dialog, statuses, navigations, toasts, calls,
-    get requests() { return requests },
-    enqueue(reply: Promise<ListResponse>) { replies.push(reply) },
-    setList(value: typeof list) { list = value },
-    cacheCurrent(value: ReturnType<typeof session>) { cachedCurrent = value },
-    setRoute(name: string) { setRouteName(name) },
-    emit(name: string) { listeners.get(name)?.forEach((listener) => listener()) },
-    listeners(name: string) { return listeners.get(name)?.size ?? 0 },
-    run,
-    dispose() { disposed?.(); setup.renderer.destroy() },
+    screen, slots, layers, listeners, requests, navigations, toasts, ctx, editor,
+    mount, run, setRoute, setList(value: SessionInfo[]) { list = value },
+    enqueue(promise: Promise<{ data: SessionInfo[] }>) { replies.push(promise) },
+    emit(name: string, data: unknown = {}) { listeners.get(name)?.forEach((listener) => listener({ data })) },
+    get open() { return !editorFocused }, get focused() { return editorFocused },
+    dispose() { stops?.(); screen.renderer.destroy() },
   }
 }
 
-test("button and keyboard toggle a left-side non-modal rail without hijacking prompt editing", async () => {
+test("default registers left overlay, footer and palette/slash command without a global open key", async () => {
   const h = await harness()
   try {
-    const openLayer = h.layers.find((layer) => layer.bindings?.some((binding) => binding.key === "left"))!
-    const navigation = h.layers.find((layer) => layer.bindings?.some((binding) => binding.key === "down"))!
-    // Model the host's currentFocusedEditor rather than a dialog: there must
-    // be no modal dialog calls or dialog mount for this view.
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    expect(openLayer.enabled?.()).toBe(true)
+    expect(plugin.id).toBe("session-sidebar")
+    expect([...h.slots.keys()].sort()).toEqual(["app", "prompt.footer.status"])
+    await h.mount()
+    expect(h.layers).toHaveLength(1) // palette/slash toggle; overlay controls mount on open
+    expect(h.layers.flatMap((layer) => layer().commands ?? []).some((cmd) => cmd.bind === "left")).toBe(false)
+    const toggle = h.layers.flatMap((layer) => layer().commands ?? []).find((cmd) => cmd.id === "session-sidebar.sessions.toggle")
+    expect(toggle?.palette).toBe(true)
+    expect(toggle?.slash).toEqual({ name: "sessions-panel" })
+    h.run("toggle")
+    expect(h.open).toBe(true)
+    expect(h.requests).toEqual([{ limit: 50, parentID: null, project: "project" }])
+    await Promise.resolve()
+    await h.screen.renderOnce()
+    expect(h.screen.captureCharFrame()).toContain("Session active")
+    expect(h.screen.captureCharFrame()).toContain("current")
+    expect(h.screen.captureCharFrame().split("\n")[0]).toMatch(/^\s{0,2}Sessions/)
+  } finally { h.dispose() }
+})
+
+test("explicit left open key is active only for an empty session prompt without a panel", async () => {
+  const h = await harness({ openKey: "left" })
+  try {
+    await h.mount()
+    const openLayer = h.layers.find((layer) => layer().commands?.some((cmd) => cmd.bind === "left"))!
+    expect((openLayer().enabled as () => boolean)()).toBe(true)
     h.editor.plainText = "draft"
-    expect(openLayer.enabled?.()).toBe(false)
+    expect((openLayer().enabled as () => boolean)()).toBe(false)
     h.editor.plainText = ""
     h.run("toggle")
-    expect(h.editor.focused).toBe(false)
-    expect(navigation.enabled?.()).toBe(true)
-    await Promise.resolve()
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    await h.setup.renderOnce()
-    const first = h.setup.captureCharFrame().split("\n")[0]
-    expect(first.indexOf("Sessions")).toBeLessThan(12)
-    expect(h.setup.captureCharFrame()).toContain("current")
-    h.run("close")
-    expect(h.editor.focused).toBe(true)
-    expect(navigation.enabled?.()).toBe(false)
+    expect((openLayer().enabled as () => boolean)()).toBe(false)
+    h.run("toggle")
+    h.setRoute({ type: "home" })
+    expect((openLayer().enabled as () => boolean)()).toBe(false)
   } finally { h.dispose() }
 })
 
-test("closed rail ignores late errors and data, cancels queued refresh, and reopens with a fresh list", async () => {
+test("search filters titles, excludes subagents, navigates only matching sessions", async () => {
   const h = await harness()
   try {
-    const failing = deferred<ListResponse>()
-    h.enqueue(failing.promise)
-    h.run("toggle")
-    expect(h.requests).toBe(1)
-    h.run("close")
-    failing.resolve({ error: new Error("late failure") })
-    await failing.promise
-    await Promise.resolve()
-    expect(h.toasts).toEqual([])
-
-    const stale = deferred<ListResponse>()
-    h.enqueue(stale.promise)
-    h.run("toggle")
-    expect(h.requests).toBe(2)
-    h.run("close")
-    stale.resolve({ data: [session("stale-closed", 3)] })
-    await stale.promise
-    await Promise.resolve()
-
-    const fresh = deferred<ListResponse>()
-    h.enqueue(fresh.promise)
-    h.run("toggle")
-    expect(h.requests).toBe(3)
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).not.toContain("stale-closed")
-    fresh.resolve({ data: [session("fresh-reopen", 4)] })
-    await fresh.promise
-    await Promise.resolve()
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("fresh-reopen")
-    expect(h.setup.captureCharFrame()).not.toContain("stale-closed")
-
-    h.emit("session.updated")
-    h.run("close")
-    await new Promise((resolve) => setTimeout(resolve, 130))
-    expect(h.requests).toBe(3)
-    expect(h.toasts).toEqual([])
-  } finally { h.dispose() }
-})
-
-test("clicking the prompt-side button opens and closes the non-modal rail", async () => {
-  const h = await harness()
-  try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    await render(() => (
-      <box width={80} height={24}>
-        <box position="absolute" left={40} top={2}>{h.slots.home_prompt_right() as never}</box>
-        {h.slots.app() as never}
-      </box>
-    ), h.setup.renderer)
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("[Sessions ▶]")
-    await h.setup.mockMouse.click(43, 2)
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame().split("\n")[0]).toContain("Sessions")
-    expect(h.editor.focused).toBe(false)
-    await h.setup.mockMouse.click(43, 2)
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame().split("\n")[0]).not.toContain("Sessions")
-    expect(h.editor.focused).toBe(true)
-  } finally { h.dispose() }
-})
-
-test("session.status changes the rendered marker from running to retrying and Enter switches the selection", async () => {
-  const h = await harness()
-  try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    h.statuses.set("old", "busy")
+    h.setList([session("old", 1), session("active", 2), session("old-child", 3, "project", "old")])
+    await h.mount()
     h.run("toggle")
     await Promise.resolve()
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("running")
-    expect(h.listeners("session.status")).toBe(2)
-    h.statuses.set("old", "retry")
-    h.emit("session.status")
-    await Promise.resolve()
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("retrying")
-    expect(h.setup.captureCharFrame()).not.toContain("running ·")
-    h.run("next")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("▸ Session old")
+    await h.screen.mockInput.typeText("OLD")
+    await h.screen.renderOnce()
+    const frame = h.screen.captureCharFrame()
+    expect(frame).toContain("Search: OLD")
+    expect(frame).toContain("Session old")
+    expect(frame).not.toContain("Session active")
+    expect(frame).not.toContain("Session old-child")
     h.run("select")
     expect(h.navigations).toEqual(["old"])
-    expect(h.requests).toBe(1)
-    h.run("toggle")
-    h.emit("session.updated")
-    await new Promise((resolve) => setTimeout(resolve, 130))
-    expect(h.requests).toBe(3)
+    expect(h.open).toBe(false)
   } finally { h.dispose() }
 })
 
-test("focusing the prompt closes the rail without stealing focus or its draft", async () => {
+test("no matches makes Enter inert; backspace restores a selectable row", async () => {
   const h = await harness()
   try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    const navigation = h.layers.find((layer) => layer.bindings?.some((binding) => binding.key === "down"))!
-    h.editor.plainText = "draft in progress"
-    h.run("toggle")
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Sessions")
-    h.editor.focus()
-    h.setup.renderer.emit("focused_editor", h.editor, null)
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).not.toContain("Sessions")
-    expect(navigation.enabled?.()).toBe(false)
-    expect(h.editor.focused).toBe(true)
-    expect(h.editor.plainText).toBe("draft in progress")
-  } finally { h.dispose() }
-})
-
-test("rail paints above the home prompt layer but below the dialog layer", async () => {
-  for (const layer of [1000, 3000]) {
-    const h = await harness()
-    try {
-      h.run("toggle")
-      await Promise.resolve()
-      await render(() => (
-        <box width={80} height={24}>
-          <box position="absolute" left={0} top={0} width={36} height={2} zIndex={layer} backgroundColor="#444444">
-            <text>{layer === 1000 ? "HOME PROMPT" : "DIALOG"}</text>
-          </box>
-          {h.slots.app() as never}
-        </box>
-      ), h.setup.renderer)
-      await h.setup.renderOnce()
-      const first = h.setup.captureCharFrame().split("\n")[0]
-      if (layer === 1000) {
-        expect(first).toContain("Sessions")
-        expect(first).not.toContain("HOME PROMPT")
-      } else {
-        expect(first).toContain("DIALOG")
-        expect(first).not.toContain("Sessions")
-      }
-    } finally { h.dispose() }
-  }
-})
-
-test("narrow 12x10 and 20x10 viewports keep the close control visible without wrapping rows", async () => {
-  for (const width of [12, 20]) {
-    const h = await harness({ width, height: 10 })
-    try {
-      Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-      h.run("toggle")
-      await Promise.resolve()
-      await render(() => h.slots.app() as never, h.setup.renderer)
-      await h.setup.renderOnce()
-      const screen = h.setup.captureCharFrame().split("\n")
-      expect(screen[0]).toContain("×")
-      expect(screen[0].indexOf("×")).toBeLessThan(width)
-      expect(screen[0]).toContain(width === 12 ? " S " : "Sessions")
-      expect(screen.join("\n")).toContain("Current")
-      expect(screen.join("\n")).toContain(width === 12 ? "Sess" : "Session act")
-      await h.setup.mockInput.typeText("active")
-      await h.setup.renderOnce()
-      const filtered = h.setup.captureCharFrame().split("\n")
-      expect(filtered[0]).toContain("×")
-      expect(filtered.join("\n")).toContain(width === 12 ? "Sess" : "Session act")
-      h.run("close")
-      expect(h.editor.focused).toBe(true)
-    } finally { h.dispose() }
-  }
-})
-
-test("typing filters fetched titles case-insensitively, retains grouping/status, and arrows navigate only matches", async () => {
-  const h = await harness()
-  try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    h.setList([
-      { ...session("old", 1), title: "ALPHA old" },
-      { ...session("active", 2), title: "Other active" },
-      { ...session("new", 3), title: "Alpha NEW" },
-    ])
-    h.statuses.set("old", "busy")
+    await h.mount()
     h.run("toggle")
     await Promise.resolve()
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    h.setup.mockInput.typeText("aLpHa")
-    await h.setup.renderOnce()
-    const frame = h.setup.captureCharFrame()
-    expect(frame).toContain("Search: aLpHa")
-    expect(frame).toContain("ALPHA old")
-    expect(frame).not.toContain("Other active")
-    expect(frame).toContain("Running")
-    expect(frame).toContain("running")
-    expect(h.editor.plainText).toBe("")
-    h.statuses.set("old", "retry")
-    h.emit("session.status")
-    await Promise.resolve()
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("retrying")
-    expect(frame).toContain("▸ ALPHA old")
-    h.run("previous")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("▸ Alpha NEW")
-    h.run("next")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("▸ ALPHA old")
-    h.run("next")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("▸ Alpha NEW")
+    await h.screen.mockInput.typeText("z")
+    await h.screen.renderOnce()
+    expect(h.screen.captureCharFrame()).toContain("No matches")
     h.run("select")
-    expect(h.navigations).toEqual(["new"])
-  } finally { h.dispose() }
-})
-
-test("no matches disables Enter, editing and clearing reset selection, and a new opening resets the query", async () => {
-  const h = await harness()
-  try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    h.run("toggle")
-    await Promise.resolve()
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    await h.setup.mockInput.typeText("z")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("No matches")
-    h.run("select")
-    h.run("next")
     expect(h.navigations).toEqual([])
     h.run("backspace")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("▸ Session active")
-    await h.setup.mockInput.typeText("old")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("▸ Session old")
-    h.run("clear")
-    await h.setup.mockInput.typeText("session old")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Search: session old")
-    expect(h.setup.captureCharFrame()).not.toContain("Session active")
-    h.run("clear")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Search: type to filter")
-    expect(h.setup.captureCharFrame()).toContain("▸ Session old")
-    h.run("close")
-    h.run("toggle")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Search: type to filter")
-    expect(h.setup.captureCharFrame()).toContain("▸ Session active")
+    await h.screen.renderOnce()
+    expect(h.screen.captureCharFrame()).toContain("▸ Session active")
   } finally { h.dispose() }
 })
 
-test("search ignores modifiers, dialogs, prompt focus, and closed rail; refresh reconciles against filtered fetched list", async () => {
+test("status events update running/retrying markers and list events debounce", async () => {
+  const h = await harness({ scope: "all", limit: 0.25 })
+  try {
+    await h.mount()
+    h.run("toggle")
+    expect(h.requests).toEqual([{ limit: 1, parentID: null }])
+    h.emit("session.status", { sessionID: "old", status: { type: "busy" } })
+    await h.screen.renderOnce()
+    expect(h.screen.captureCharFrame()).toContain("running")
+    h.emit("session.status", { sessionID: "old", status: { type: "retry" } })
+    await h.screen.renderOnce()
+    expect(h.screen.captureCharFrame()).toContain("retrying")
+    h.emit("session.renamed")
+    h.emit("session.created")
+    await new Promise((resolve) => setTimeout(resolve, 130))
+    expect(h.requests).toHaveLength(2)
+  } finally { h.dispose() }
+})
+
+test("disabled plugin registers nothing; home route cannot open session panel", async () => {
+  const h = await harness({ enabled: false })
+  try { expect(h.slots.size).toBe(0); expect(h.layers).toHaveLength(0) } finally { h.dispose() }
+  const home = await harness()
+  try {
+    home.setRoute({ type: "home" })
+    await home.mount()
+    home.run("toggle")
+    expect(home.open).toBe(false)
+    expect(home.requests).toHaveLength(0)
+  } finally { home.dispose() }
+})
+
+test("unmount unsubscribes listeners and ignores late list results", async () => {
+  const h = await harness()
+  const pending = deferred<{ data: SessionInfo[] }>()
+  h.enqueue(pending.promise)
+  try {
+    await h.mount()
+    h.run("toggle")
+    expect(h.listeners.get("session.status")?.size).toBe(1)
+    h.dispose()
+    pending.resolve({ data: [session("late", 5)] })
+    await pending.promise
+    await Promise.resolve()
+    expect(h.toasts).toEqual([])
+  } finally { /* renderer already destroyed */ }
+})
+
+test("custom keys, draft override and disabled status apply to V2 layers", async () => {
+  const h = await harness({ openKey: "ctrl+g", closeKey: "ctrl+j", requireEmptyPrompt: false, showStatus: false })
+  try {
+    await h.mount()
+    h.run("toggle")
+    const open = h.layers.find((layer) => layer().commands?.some((cmd) => cmd.bind === "ctrl+g"))!
+    h.editor.plainText = "keep this draft"
+    expect((open().enabled as () => boolean)()).toBe(false)
+    const close = h.layers.flatMap((layer) => layer().commands ?? []).find((cmd) => cmd.id === "session-sidebar.sessions.close")
+    expect(close?.bind).toBe("ctrl+j")
+    h.emit("session.status", { sessionID: "old", status: { type: "busy" } })
+    await h.screen.renderOnce()
+    expect(h.screen.captureCharFrame()).not.toContain("running")
+    expect(h.editor.plainText).toBe("keep this draft")
+  } finally { h.dispose() }
+})
+
+test("late failures and pending debounced refreshes are discarded when panel unmounts", async () => {
+  const h = await harness()
+  const late = deferred<{ data: SessionInfo[] }>()
+  h.enqueue(late.promise)
+  await h.mount()
+  h.run("toggle")
+  expect(h.requests).toHaveLength(1)
+  h.emit("session.renamed")
+  h.dispose()
+  late.resolve({ data: [session("stale", 5)] })
+  await late.promise
+  await new Promise((resolve) => setTimeout(resolve, 130))
+  expect(h.requests).toHaveLength(1)
+  expect(h.toasts).toEqual([])
+})
+
+test("host-consumed keys and modifier shortcuts never enter the search", async () => {
   const h = await harness()
   try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    const navigation = h.layers.find((layer) => layer.bindings?.some((binding) => binding.key === "down"))!
-    expect(navigation.bindings?.map((binding) => binding.key)).toContain("backspace")
-    expect(navigation.bindings?.map((binding) => binding.key)).toContain("ctrl+u")
+    await h.mount()
     h.run("toggle")
-    await Promise.resolve()
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    h.setup.mockInput.pressKey("x", { ctrl: true })
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Search: type to filter")
-    h.setup.mockInput.pressKey("x", { meta: true })
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Search: type to filter")
-    h.dialog.open = true
-    h.setup.mockInput.pressKey("x")
-    expect(navigation.enabled?.()).toBe(false)
-    h.dialog.open = false
-    await h.setup.mockInput.typeText("old")
+    const host = (event: import("@opentui/core").KeyEvent) => {
+      if (event.name !== "/") return
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    h.screen.renderer.keyInput.prependListener("keypress", host)
+    try {
+      h.screen.mockInput.pressKey("/")
+      h.screen.mockInput.pressKey("x", { ctrl: true })
+      h.screen.mockInput.pressKey("x", { meta: true })
+      await h.screen.renderOnce()
+      expect(h.screen.captureCharFrame()).toContain("Search: type to filter")
+      await h.screen.mockInput.typeText("old")
+      await h.screen.renderOnce()
+      expect(h.screen.captureCharFrame()).toContain("Search: old")
+    } finally { h.screen.renderer.keyInput.off("keypress", host) }
+  } finally { h.dispose() }
+})
+
+test("refresh reconciles selection against filtered results and no matches cannot navigate", async () => {
+  const h = await harness()
+  try {
+    await h.mount()
+    h.run("toggle")
+    await h.screen.mockInput.typeText("old")
     h.setList([session("new", 3), session("active", 2)])
-    h.emit("session.updated")
+    h.emit("session.renamed")
     await new Promise((resolve) => setTimeout(resolve, 130))
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("No matches")
-    expect(h.setup.captureCharFrame()).not.toContain("Session old")
+    await h.screen.renderOnce()
+    expect(h.screen.captureCharFrame()).toContain("No matches")
+    h.run("next")
     h.run("select")
     expect(h.navigations).toEqual([])
     h.setList([session("old-new", 4), session("active", 2)])
-    h.emit("session.updated")
+    h.emit("session.renamed")
     await new Promise((resolve) => setTimeout(resolve, 130))
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("▸ Session old-new")
-    h.editor.focus()
-    h.setup.renderer.emit("focused_editor", h.editor, null)
-    h.setup.mockInput.pressKey("x")
-    expect(h.editor.plainText).toBe("")
-    h.run("toggle")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Search: type to filter")
+    await h.screen.renderOnce()
+    expect(h.screen.captureCharFrame()).toContain("▸ Session old-new")
   } finally { h.dispose() }
 })
 
-test("cached current outside fetched roots cannot appear in search or be selected", async () => {
-  const h = await harness()
-  try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    h.cacheCurrent(session("active", 2))
-    h.setList([session("old", 1)])
-    h.run("toggle")
-    await Promise.resolve()
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    await h.setup.mockInput.typeText("active")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("No matches")
-    expect(h.setup.captureCharFrame()).not.toContain("Session active")
-    h.run("select")
-    expect(h.navigations).toEqual([])
-  } finally { h.dispose() }
-})
-
-test("project uses scoped list; all uses global session endpoint with roots and limit", async () => {
-  for (const scope of ["project", "all"] as const) {
-    const h = await harness(undefined, { scope, limit: 7 })
+test("narrow left overlay keeps close control and selected session visible", async () => {
+  for (const width of [12, 20]) {
+    const h = await harness({}, { width, height: 10 })
     try {
-      h.setList([session("other-project", 3), session("active", 2)])
+      await h.mount()
       h.run("toggle")
-      await Promise.resolve()
-      await render(() => h.slots.app() as never, h.setup.renderer)
-      await h.setup.renderOnce()
-      expect(h.calls).toEqual([scope === "all"
-        ? { endpoint: "global", query: { directory: "", roots: true, limit: 7 } }
-        : { endpoint: "project", query: { roots: true, limit: 7, scope: "project" } }])
-      expect(h.setup.captureCharFrame()).toContain("Session other-project")
+      await h.screen.renderOnce()
+      const frame = h.screen.captureCharFrame().split("\n")
+      expect(frame[0]).toContain("×")
+      expect(frame[0]!.indexOf("×")).toBeLessThan(width)
+      expect(frame.join("\n")).toContain("Current")
+      expect(frame.join("\n")).toContain(width === 12 ? "Sess" : "Session act")
     } finally { h.dispose() }
   }
-})
-
-test("positive fractional limit clamps to one on both listing endpoints", async () => {
-  for (const scope of ["project", "all"] as const) {
-    const h = await harness(undefined, { scope, limit: 0.25 })
-    try {
-      h.run("toggle")
-      expect(h.calls).toEqual([scope === "all"
-        ? { endpoint: "global", query: { directory: "", roots: true, limit: 1 } }
-        : { endpoint: "project", query: { roots: true, limit: 1, scope: "project" } }])
-    } finally { h.dispose() }
-  }
-})
-
-test("real SDK with a default directory sends global list without directory filter and keeps project scope", async () => {
-  for (const scope of ["project", "all"] as const) {
-    const requests: Request[] = []
-    const client = createOpencodeClient({
-      baseUrl: "http://localhost:4096",
-      directory: "/another/project",
-      fetch: Object.assign(async (request: RequestInfo | URL) => {
-        requests.push(request as Request)
-        return new Response("[]", { headers: { "content-type": "application/json" } })
-      }, { preconnect: globalThis.fetch.preconnect }),
-    })
-    const h = await harness(undefined, { scope, limit: 9 }, client)
-    try {
-      h.run("toggle")
-      await new Promise((resolve) => setTimeout(resolve, 0))
-      expect(requests).toHaveLength(1)
-      const url = new URL(requests[0]!.url)
-      expect(url.pathname).toBe(scope === "all" ? "/experimental/session" : "/session")
-      expect(url.searchParams.get("roots")).toBe("true")
-      expect(url.searchParams.get("limit")).toBe("9")
-      expect(url.searchParams.get("directory")).toBe(scope === "all" ? "" : "/another/project")
-      expect(url.searchParams.get("scope")).toBe(scope === "project" ? "project" : null)
-      expect(requests[0]!.headers.has("x-opencode-directory")).toBe(false)
-    } finally { h.dispose() }
-  }
-})
-
-test("leaving home/session closes hidden rail, cancels pending response and resets search on return", async () => {
-  const h = await harness()
-  try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    const navigation = h.layers.find((layer) => layer.bindings?.some((binding) => binding.key === "down"))!
-    const pending = deferred<ListResponse>()
-    h.enqueue(pending.promise)
-    h.run("toggle")
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    await h.setup.mockInput.typeText("old")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Search: old")
-    h.setRoute("settings")
-    await h.setup.renderOnce()
-    expect(navigation.enabled?.()).toBe(false)
-    expect(h.editor.focused).toBe(false) // do not focus an editor in the other route
-    pending.resolve({ data: [session("stale", 5)] })
-    await pending.promise
-    await Promise.resolve()
-    h.setRoute("session")
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).not.toContain("Sessions")
-    h.run("toggle")
-    await Promise.resolve()
-    await h.setup.renderOnce()
-    expect(h.setup.captureCharFrame()).toContain("Search: type to filter")
-    expect(h.setup.captureCharFrame()).not.toContain("Session stale")
-  } finally { h.dispose() }
-})
-
-test("host keymap-consumed printable shortcuts take precedence over rail text input", async () => {
-  const h = await harness()
-  try {
-    Object.defineProperty(h.setup.renderer, "currentFocusedEditor", { configurable: true, get: () => h.editor.focused ? h.editor : null })
-    h.run("toggle")
-    await Promise.resolve()
-    await render(() => h.slots.app() as never, h.setup.renderer)
-    // OpenTUI's keymap host installs its listener with prependListener and
-    // prevents default/stops propagation for a matched binding.
-    const hostBinding = (key: import("@opentui/core").KeyEvent) => {
-      if (key.name !== "/") return
-      key.preventDefault()
-      key.stopPropagation()
-    }
-    h.setup.renderer.keyInput.prependListener("keypress", hostBinding)
-    try {
-      h.setup.mockInput.pressKey("/")
-      await h.setup.renderOnce()
-      expect(h.setup.captureCharFrame()).toContain("Search: type to filter")
-      await h.setup.mockInput.typeText("old")
-      await h.setup.renderOnce()
-      expect(h.setup.captureCharFrame()).toContain("Search: old")
-      h.setup.mockInput.pressKey("u", { ctrl: true })
-      await h.setup.renderOnce()
-      expect(h.setup.captureCharFrame()).toContain("Search: old")
-      expect(h.editor.plainText).toBe("")
-    } finally { h.setup.renderer.keyInput.off("keypress", hostBinding) }
-  } finally { h.dispose() }
 })

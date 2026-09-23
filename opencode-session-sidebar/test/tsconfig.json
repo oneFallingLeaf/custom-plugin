@@ -10,5 +10,5 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["../tui/sessions.tsx", "sessions.test.tsx"]
+  "include": ["../tui/*.ts", "../tui/*.tsx", "*.tsx"]
 }
