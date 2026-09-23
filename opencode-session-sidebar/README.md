@@ -1,4 +1,4 @@
-# opencode-copilot-sessions
+# opencode-session-sidebar
 
 An [OpenCode](https://opencode.ai) TUI plugin for switching sessions from a
 collapsible panel at the left edge of the screen.

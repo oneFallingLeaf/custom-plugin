@@ -213,7 +213,7 @@ tables). Times are local (UTC+8).
 | Time | Session | Request | Outcome |
 | --- | --- | --- | --- |
 | 06:09 | `ses_f5e08375cffe5E57CasCrf5nXH` | "edit opencode to show models on the right side below LSP — search box + model list" | Researched TUI slots; created the plugin, the `api.model` patch, `opencode-patched`, and the repo (commit `180b679`). |
-| 06:51 | `ses_f5de16da5ffepMBJo245hJ80tr` | left-arrow Copilot sessions plugin | Sibling plugin (`opencode-copilot-sessions`), unrelated to this one. |
+| 06:51 | `ses_f5de16da5ffepMBJo245hJ80tr` | left-arrow sessions plugin | Sibling plugin (`opencode-session-sidebar`), unrelated to this one. |
 | 06:57 | `ses_f5ddbdc86ffeeY6HU1a6ppk1mP` | "it should not expand the more on hover it needs to be click" + search caret + prompt not typeable | **Removed** row `onMouseOver` cursor movement, made `▲/▼ N more` clickable, fixed the caret, added the `focused_editor` release. This is the original "click, don't hover" contract. |
 | 07:11 | `ses_f5dcfc77affeGQIeAuEL6wevXa` | "pressing a model opens the popup instead of switching" | Confirmed stock fallback; installed the patched binary via the `opencode-patched` wrapper + cache. |
 | 19:52 | `ses_f5b16c7d3ffeOwnuHL3FT0ctJ2` | "mouse pointer doesn't change after search" | Re-added OSC 22 pointer styles **and** hover-moves-selection (mirroring native `DialogSelect`) → reintroduced the auto-scroll on hover. |
