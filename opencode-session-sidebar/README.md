@@ -16,8 +16,32 @@ screen while open. Closing it reveals the content underneath.
 
 ## Install
 
-Copy the plugin into your global TUI plugin directory and register it in
-`~/.config/opencode/tui.json`:
+### Install from npm
+
+Install the published package into your global OpenCode config directory:
+
+```sh
+npm install --prefix ~/.config/opencode opencode-session-sidebar
+```
+
+Register the installed file in `~/.config/opencode/tui.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "plugin": [
+    ["./node_modules/opencode-session-sidebar/tui/sessions.tsx", { "openKey": "left", "closeKey": "right" }]
+  ]
+}
+```
+
+Restart OpenCode. TUI plugins must be registered in `tui.json`, not
+`opencode.json`; installing the npm package alone does not enable the plugin.
+
+### Install from a local checkout
+
+From this repository's `opencode-session-sidebar` directory, copy the plugin
+into your global TUI plugin directory:
 
 ```sh
 mkdir -p ~/.config/opencode/plugins/tui
@@ -33,8 +57,8 @@ cp tui/sessions.tsx ~/.config/opencode/plugins/tui/
 }
 ```
 
-Restart OpenCode. TUI plugins are registered in `tui.json`, not `opencode.json`.
-You can also register this repository's `tui/sessions.tsx` by absolute path.
+Restart OpenCode. You can also register this repository's `tui/sessions.tsx` by
+absolute path.
 
 ## Controls
 
@@ -62,13 +86,14 @@ Clicking back into the prompt closes the panel without changing your draft.
 
 ## Configuration
 
-Options go in the second element of the `tui.json` plugin entry:
+Options go in the second element of the `tui.json` plugin entry. For an npm
+installation, use the installed file path:
 
 ```json
 {
   "$schema": "https://opencode.ai/tui.json",
   "plugin": [
-    ["./plugins/tui/sessions.tsx", {
+    ["./node_modules/opencode-session-sidebar/tui/sessions.tsx", {
       "openKey": "left",
       "closeKey": "right",
       "requireEmptyPrompt": true,
