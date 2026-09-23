@@ -40,9 +40,10 @@ TUI plugins are **not** auto-discovered. They must be listed in
 
 3. Restart OpenCode.
 
-For `opencode-session-sidebar`, you can install the published package with npm
-instead of copying a file. See its
-[npm installation instructions](opencode-session-sidebar/README.md#install-from-npm).
+For `opencode-session-sidebar`, OpenCode can install and register the published
+package for you with `opencode plugin opencode-session-sidebar --global`. See its
+[installation instructions](opencode-session-sidebar/README.md#install) for
+manual npm and local-file options.
 
 Alternatively, point `tui.json` at a file inside a clone of this repository by
 absolute path. The per-plugin READMEs have copy-pasteable examples and the full

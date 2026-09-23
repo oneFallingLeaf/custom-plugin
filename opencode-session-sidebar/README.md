@@ -16,6 +16,18 @@ screen while open. Closing it reveals the content underneath.
 
 ## Install
 
+### Install with OpenCode
+
+Run the plugin installer with `--global` to use the sidebar in every project:
+
+```sh
+opencode plugin opencode-session-sidebar --global
+```
+
+OpenCode installs the package from npm and adds it to your global
+`~/.config/opencode/tui.json` automatically. Restart OpenCode to load it. The
+command is `opencode plugin <package>`; there is no `plugin add` subcommand.
+
 ### Install from npm
 
 Install the published package into your global OpenCode config directory:
