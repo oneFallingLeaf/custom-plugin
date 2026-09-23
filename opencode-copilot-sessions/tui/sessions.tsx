@@ -102,8 +102,10 @@ function Rail(props: {
   }
   const width = () => Math.min(36, Math.max(4, dimensions().width - 2))
   const compact = () => width() < 12
+  // Keep the original one-line search at small sizes so the selected row fits.
+  const searchBox = () => width() >= 30 && dimensions().height >= 12
   // Each entry uses three terminal lines (category, title, status).
-  const rows = () => Math.max(1, Math.floor((dimensions().height - 7) / 3))
+  const rows = () => Math.max(1, Math.floor((dimensions().height - 7 - (searchBox() ? 2 : 0)) / 3))
   const window = () => {
     const list = items()
     const index = Math.max(0, list.findIndex((item) => item.session.id === props.selected()))
@@ -130,10 +132,16 @@ function Rail(props: {
         <text fg={theme().text} wrapMode="none">{compact() ? "S" : "Sessions"}</text>
         <text fg={theme().textMuted} onMouseUp={props.close}>×</text>
       </box>
+      <Show when={searchBox()} fallback={
+        <text fg={theme().accent} flexShrink={0} wrapMode="none">{compact() ? "/" : "Search: "}{props.query() || (compact() ? "" : "type to filter")}</text>
+      }>
+        <box height={3} flexShrink={0} border borderStyle="heavy" borderColor={theme().accent} backgroundColor={theme().backgroundElement} paddingLeft={1} paddingRight={1}>
+          <text fg={theme().text} wrapMode="none"><b>Search: {props.query() || "type to filter"}</b></text>
+        </box>
+      </Show>
       <Show when={width() >= 20} fallback={null}>
         <text fg={theme().textMuted} flexShrink={0} wrapMode="none">↑↓ · Enter · Esc</text>
       </Show>
-      <text fg={theme().accent} flexShrink={0} wrapMode="none">{compact() ? "/" : "Search: "}{props.query() || (compact() ? "" : "type to filter")}</text>
       <text fg={theme().textMuted} flexShrink={0}>{window().start > 0 ? `↑ ${window().start} more` : " "}</text>
       <For each={window().items}>
         {(item) => {
