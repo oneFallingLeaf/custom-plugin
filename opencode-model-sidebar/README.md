@@ -33,17 +33,16 @@ only to the legacy V1 plugin.
 
 The same package supports V1 (1.18.29+) and V2 (2.0.12+). Its `./tui`
 entrypoint selects the implementation for the host; `./v1` and `./v2` are
-available for direct imports. Once version 0.1.1 or later is published, install
-the package with:
+available for direct imports. Install the package with:
 
 ```sh
 opencode plugin add opencode-model-sidebar
 ```
 
 This installs the package and adds it to the global `~/.config/opencode/cli.json`
-(or `$XDG_CONFIG_HOME/opencode/cli.json`). **Published 0.1.0 does not support
-this command:** it exports a package root that V2 mistakes for a server plugin.
-Until 0.1.1 is published, add the plugin manually to `cli.json` instead:
+(or `$XDG_CONFIG_HOME/opencode/cli.json`). It requires 0.1.1 or later; 0.1.0
+exports a package root that V2 mistakes for a server plugin. Alternatively, add
+the plugin manually to `cli.json`:
 
 ```json
 {
