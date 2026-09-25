@@ -31,20 +31,29 @@ only to the legacy V1 plugin.
 
 ### OpenCode V2
 
-The hybrid plugin is exported at `./tui` and as the package entrypoint; its
-`setup()` selects the V2 implementation using `context.app.version`. `./v2`
-exports the V2 implementation directly, while `./v1` exports the V1 plugin.
-Add
-the package directory to the **global** `~/.config/opencode/cli.json` (or
-`$XDG_CONFIG_HOME/opencode/cli.json`). There is no project-local CLI config.
-The example is in [`examples/cli.json`](examples/cli.json):
+The same package supports V1 (1.18.29+) and V2 (2.0.12+). Its `./tui`
+entrypoint selects the implementation for the host; `./v1` and `./v2` are
+available for direct imports. Install the package with:
+
+```sh
+opencode plugin add opencode-model-sidebar
+```
+
+This installs the package and adds it to the global `~/.config/opencode/cli.json`
+(or `$XDG_CONFIG_HOME/opencode/cli.json`). It requires 0.1.1 or later; 0.1.0
+exports a package root that V2 mistakes for a server plugin. Alternatively, add
+the plugin manually to `cli.json`:
 
 ```json
 {
   "$schema": "https://opencode.ai/v2/cli.json",
-  "plugins": ["/absolute/path/to/opencode-model-sidebar"]
+  "plugins": ["opencode-model-sidebar"]
 }
 ```
+
+For a local checkout, use the absolute path shown in
+[`examples/cli.json`](examples/cli.json). `opencode plugin add` accepts npm or
+Git package specifiers, not a local directory path.
 
 Restart the CLI after adding it. On stock V2, double-clicking/pressing Enter
 opens the native `model.list` picker to complete the switch; the plugin cannot
@@ -151,7 +160,7 @@ or favorites accessor. The server's `session.switchModel` is not equivalent to
 changing the TUI model used by a typed prompt. Direct switching/favorites
 therefore require [`patches/opencode-model-api-v2.patch`](patches/opencode-model-api-v2.patch),
 which adds `context.model` to the V2 CLI plugin context. It applies cleanly to
-the pinned upstream **v2.0.12** tag (not a generic patch for all V2 releases).
+the pinned upstream **v2.0.14** tag (not a generic patch for all V2 releases).
 The `scripts/opencode-patched` wrapper uses a separate Git worktree and Bun to
 build/cache that patched version; using it is optional. Do not place the
 wrapper on PATH until you have reviewed it and have a source checkout with the

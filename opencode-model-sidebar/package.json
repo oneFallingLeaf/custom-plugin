@@ -1,11 +1,10 @@
 {
   "name": "opencode-model-sidebar",
-  "version": "0.1.0",
-  "description": "OpenCode TUI plugin: a searchable model list in the session sidebar, below LSP.",
+  "version": "0.1.1",
+  "description": "OpenCode V1/V2 TUI plugin: a searchable model list in the session sidebar.",
   "type": "module",
   "license": "GPL-2.0-only",
   "exports": {
-    ".": "./tui/index.ts",
     "./tui": "./tui/index.ts",
     "./v1": "./tui/model-sidebar.tsx",
     "./v2": "./tui/model-sidebar-v2.tsx"
@@ -16,6 +15,7 @@
     "examples",
     "README.md"
   ],
+  "oc-plugin": ["tui"],
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -24,12 +24,16 @@
     "sidebar"
   ],
   "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.18.29",
     "@opencode/plugin": ">=2.0.12",
     "@opentui/core": ">=0.5.10",
     "@opentui/solid": ">=0.5.10",
     "solid-js": ">=1.9.0"
   },
   "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    },
     "@opencode/plugin": {
       "optional": true
     }
